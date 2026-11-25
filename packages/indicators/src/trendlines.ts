@@ -127,6 +127,9 @@ export function detectTrendlines(
             anchorB.confirmedIndex,
             touchIndices.at(-1) ?? anchorB.confirmedIndex
           ),
+          confirmedAtTime: candles[
+            Math.max(anchorB.confirmedIndex, touchIndices.at(-1) ?? anchorB.confirmedIndex)
+          ]!.closeTime,
           brokenAtIndex: undefined
         });
       }

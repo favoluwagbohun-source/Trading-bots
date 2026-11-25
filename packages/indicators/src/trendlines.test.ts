@@ -42,6 +42,12 @@ describe("trendline engine", () => {
   });
 
   it("detects a break only after a closed candle confirms it", () => {
+    const candles = [
+      candle(0, 101, 99, 100),
+      candle(1, 103, 101, 102),
+      candle(2, 103, 101, 102),
+      candle(3, 104, 96, 96)
+    ];
     const line = {
       id: "ascending-test",
       direction: "ascending" as const,
@@ -51,14 +57,9 @@ describe("trendline engine", () => {
       touchIndices: [0, 2],
       qualifyingTouchCount: 2,
       confirmedAtIndex: 3,
+      confirmedAtTime: candles[3]!.closeTime,
       brokenAtIndex: undefined
     };
-    const candles = [
-      candle(0, 101, 99, 100),
-      candle(1, 103, 101, 102),
-      candle(2, 103, 101, 102),
-      candle(3, 104, 96, 96)
-    ];
 
     expect(findTrendlineBreaks(candles, [line])).toEqual([
       expect.objectContaining({

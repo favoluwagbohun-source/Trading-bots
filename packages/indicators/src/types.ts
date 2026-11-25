@@ -33,5 +33,6 @@ export interface Trendline {
   readonly touchIndices: readonly number[];
   readonly qualifyingTouchCount: number;
   readonly confirmedAtIndex: number;
+  readonly confirmedAtTime: number;
   readonly brokenAtIndex: number | undefined;
 }

@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/market-data" },
-    { "path": "./packages/indicators" }
+    { "path": "./packages/indicators" },
+    { "path": "./packages/strategies" }
   ]
 }
