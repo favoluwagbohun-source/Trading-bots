@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { CandleStore, normalizeSymbol, parseRestKline, validateCandle } from "./candle.js";
+import {
+  CandleStore,
+  normalizeSymbol,
+  parseRestKline,
+  validateCandle,
+  validateTimeframe
+} from "./candle.js";
 
 describe("market-data candles", () => {
   it("normalizes valid symbols", () => {
     expect(normalizeSymbol(" btcusdt ")).toBe("BTCUSDT");
+  });
+
+  it("supports Binance monthly and one-minute intervals distinctly", () => {
+    expect(() => validateTimeframe("1M")).not.toThrow();
+    expect(() => validateTimeframe("1m")).not.toThrow();
   });
 
   it("parses and validates Binance REST klines", () => {

@@ -6,6 +6,7 @@
     { "path": "./packages/indicators" },
     { "path": "./packages/strategies" },
     { "path": "./packages/risk-engine" },
-    { "path": "./packages/backtesting" }
+    { "path": "./packages/backtesting" },
+    { "path": "./packages/replay" }
   ]
 }

@@ -1,4 +1,5 @@
 export const SUPPORTED_TIMEFRAMES = [
+  "1M",
   "1m",
   "5m",
   "1h",
