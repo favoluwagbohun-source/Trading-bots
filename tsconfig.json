@@ -5,6 +5,7 @@
     { "path": "./packages/market-data" },
     { "path": "./packages/indicators" },
     { "path": "./packages/strategies" },
-    { "path": "./packages/risk-engine" }
+    { "path": "./packages/risk-engine" },
+    { "path": "./packages/backtesting" }
   ]
 }

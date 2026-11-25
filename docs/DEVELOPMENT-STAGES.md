@@ -7,7 +7,7 @@
 - [x] Stage 5: Top-Down Trendline strategy
 - [x] Stage 6: three additional strategies
 - [x] Stage 7: risk and position sizing
-- [ ] Stage 8: historical backtesting
+- [x] Stage 8: historical backtesting
 - [ ] Stage 9: replay and manual paper trading
 - [ ] Stage 10: chart application
 - [ ] Stage 11: Telegram integration

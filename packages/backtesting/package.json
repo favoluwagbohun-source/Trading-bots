@@ -1,0 +1,17 @@
+{
+  "name": "@crypto-signal/backtesting",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@crypto-signal/indicators": "0.1.0",
+    "@crypto-signal/risk-engine": "0.1.0",
+    "@crypto-signal/shared": "0.1.0"
+  }
+}
