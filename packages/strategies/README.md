@@ -13,3 +13,25 @@ at the immediate next 5-minute candle open. Four-hour trendlines are projected
 onto the 5-minute execution candles using timestamp anchors. A retest requires a
 recent confirmed close across that line followed by a confirmed revisit and
 directional close. Position sizing is not included; that belongs to Stage 7.
+
+## Additional strategy prototypes
+
+These are independently callable detectors. Their thresholds and candle rules
+are engineering hypotheses, not verified or attributed methodology. They do
+not imply profitability.
+
+- `evaluateBreakAndRetest`: starts from a confirmed swing level, requires a
+  closed breakout, then a later level revisit and directional close; invalidates
+  a setup if an intervening candle closes back across the level.
+- `evaluateLiquiditySweep`: requires a closed candle to strictly pass a
+  previously confirmed swing high/low, then close back inside with a
+  directionally confirming body.
+- `evaluateOrderBlockRetest`: uses the adjacent opposing candle as the zone,
+  requires a displacement body of at least the configured ATR multiple (default
+  2 ATR), and waits for a later retest with a directional close. Full candle
+  high/low defines the zone.
+
+Each detector emits its own setup, reference level/zone, stop, and next-candle
+entry time. `activateSetupAtNextOpen` creates separate R-based target plans and
+rejects entries with non-positive risk or TP2 below 2R. Position sizing,
+performance reports, and grades remain future stages.
