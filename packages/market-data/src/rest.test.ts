@@ -33,4 +33,21 @@ describe("Binance REST client", () => {
       timeframe: "5m"
     })).resolves.toEqual([]);
   });
+
+  it("marks the current unfinished Binance candle as open", async () => {
+    const now = Date.now();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify([
+      [now, "100", "105", "99", "104", "12", now + 299_999,
+        "1000", 200, "8", "800", "0"]
+    ]), { status: 200 }));
+    const client = new BinanceRestClient(["https://data-api.binance.vision"], fetchImpl);
+
+    const candles = await client.getHistoricalKlines({
+      symbol: "BTCUSDT",
+      timeframe: "5m",
+      limit: 1
+    });
+
+    expect(candles[0]?.closed).toBe(false);
+  });
 });

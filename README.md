@@ -2,16 +2,15 @@
 
 A modular cryptocurrency market-analysis, paper-trading, backtesting, charting, and Telegram signal platform.
 
-## Stage 1 status
+## Current implementation
 
-The repository is initialized as a TypeScript monorepo. Stage 1 provides:
+Stages 1-10 are implemented. The repository provides:
 
-- documented architecture and stage boundaries;
-- npm workspace configuration;
-- strict TypeScript configuration;
-- a shared package scaffold;
-- placeholder test/build scripts;
-- a stage checklist and architecture specification.
+- a TypeScript monorepo and documented architecture;
+- Binance public market-data, indicators, strategies, risk, and backtesting packages;
+- historical candle replay and manual paper trading;
+- a React/Vite dark chart and Fastify market-data API;
+- a stage checklist and package-level tests.
 
 Production exchange orders are intentionally out of scope. The system will support Binance public market data and simulated paper trades only.
 
@@ -39,4 +38,12 @@ npm install
 npm run build
 npm test
 npm run check
+```
+
+Run the chart locally by starting the API and web workspaces in separate
+terminals:
+
+```bash
+npm run dev --workspace apps/api
+npm run dev --workspace apps/web
 ```

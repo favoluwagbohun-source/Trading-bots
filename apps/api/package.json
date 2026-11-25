@@ -1,0 +1,21 @@
+{
+  "name": "@crypto-signal/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@crypto-signal/market-data": "0.1.0",
+    "@fastify/websocket": "^11.2.0",
+    "fastify": "^5.6.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6"
+  }
+}

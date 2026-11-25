@@ -9,7 +9,7 @@
 - [x] Stage 7: risk and position sizing
 - [x] Stage 8: historical backtesting
 - [x] Stage 9: replay and manual paper trading
-- [ ] Stage 10: chart application
+- [x] Stage 10: chart application
 - [ ] Stage 11: Telegram integration
 - [ ] Stage 12: chart-image generation
 - [ ] Stage 13: performance dashboard

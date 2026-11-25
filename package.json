@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run bundle --workspace apps/web",
     "test": "vitest run",
     "check": "npm run build && npm test"
   },

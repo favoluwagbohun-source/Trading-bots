@@ -47,7 +47,10 @@ export class BinanceRestClient {
         if (!Array.isArray(payload)) {
           throw new Error("Binance REST returned a non-array kline response");
         }
-        return payload.map((row) => parseRestKline(row, true));
+        const receivedAt = Date.now();
+        return payload.map((row) =>
+          parseRestKline(row, Number(Array.isArray(row) ? row[6] : NaN) < receivedAt)
+        );
       } catch (error) {
         lastError = error;
       }
