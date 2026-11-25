@@ -2,7 +2,7 @@
 
 - [x] Stage 1: project setup and architecture
 - [x] Stage 2: Binance market-data engine
-- [ ] Stage 3: indicator and market-structure engine
+- [x] Stage 3: indicator and market-structure engine
 - [ ] Stage 4: trendline research and detection
 - [ ] Stage 5: Top-Down Trendline strategy
 - [ ] Stage 6: three additional strategies
