@@ -18,6 +18,12 @@ export interface SignalScannerOptions {
   readonly onCandidate: (candidate: SignalCandidate) => void | Promise<void>;
   readonly onError: (symbol: string, error: unknown) => void;
   readonly onCandles?: (symbol: string, candles: readonly Candle[]) => void | Promise<void>;
+  readonly onMarketDataSuccess?: (symbol: string) => void;
+  readonly onScanStart?: () => void;
+  readonly onScanComplete?: (summary: {
+    readonly hadError: boolean;
+    readonly lastError: string | null;
+  }) => void;
   readonly historyLimit?: number;
 }
 
@@ -66,7 +72,10 @@ export class SignalScanner {
   }
 
   async scanOnce(): Promise<SignalCandidate[]> {
+    this.options.onScanStart?.();
     const emitted: SignalCandidate[] = [];
+    let hadError = false;
+    let lastError: string | null = null;
     for (const symbol of this.symbols) {
       try {
         const results = await Promise.allSettled(ANALYSIS_TIMEFRAMES.map((timeframe) =>
@@ -77,18 +86,23 @@ export class SignalScanner {
             })
         ));
         const datasets = new Map<MarketTimeframe, readonly Candle[]>();
+        let symbolHadTimeframeError = false;
         for (const [index, result] of results.entries()) {
           const timeframe = ANALYSIS_TIMEFRAMES[index]!;
           if (result.status === "fulfilled") {
             datasets.set(timeframe, result.value);
           } else {
-            this.options.onError(
-              symbol,
-              new Error(`Unable to load ${timeframe} candles: ${String(result.reason)}`)
-            );
+            symbolHadTimeframeError = true;
+            hadError = true;
+            const error = new Error(`Unable to load ${timeframe} candles: ${String(result.reason)}`);
+            lastError = error.message;
+            this.options.onError(symbol, error);
           }
         }
         if (!datasets.has("5m")) continue;
+        if (!symbolHadTimeframeError) {
+          this.options.onMarketDataSuccess?.(symbol);
+        }
         if (this.options.onCandles) {
           await this.options.onCandles(symbol, datasets.get("5m")!);
         }
@@ -100,6 +114,8 @@ export class SignalScanner {
           emitted.push(candidate);
         }
       } catch (error) {
+        hadError = true;
+        lastError = error instanceof Error ? error.message : String(error);
         this.options.onError(symbol, error);
       }
     }
@@ -108,6 +124,7 @@ export class SignalScanner {
     for (const [signalId, createdAt] of this.emittedCandidates) {
       if (createdAt < cutoff) this.emittedCandidates.delete(signalId);
     }
+    this.options.onScanComplete?.({ hadError, lastError });
     return emitted;
   }
 

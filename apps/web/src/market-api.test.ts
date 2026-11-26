@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchHistoricalCandles,
+  fetchMarketAnalysis,
   marketStreamUrl,
   parseMarketStreamMessage
 } from "./market-api.js";
@@ -48,6 +49,27 @@ describe("web market API client", () => {
       timeframe: "5m",
       limit: 10
     })).rejects.toThrow("invalid OHLCV candle");
+  });
+
+  it("fetches and validates multi-timeframe analysis from /api/market/analysis", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      symbol: "BTCUSDT",
+      snapshotId: "BTCUSDT:5m:1700000000000",
+      analysisTime: 1_700_000_299_999,
+      latestPrice: 101,
+      signalCandle: candle,
+      timeframes: [],
+      fourHourTrendlines: [],
+      swingLevels: [],
+      evaluations: [],
+      candidates: [],
+      warnings: []
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchMarketAnalysis("BTCUSDT");
+    expect(result.symbol).toBe("BTCUSDT");
+    expect(fetchMock).toHaveBeenCalledWith("/api/market/analysis?symbol=BTCUSDT", {});
   });
 
   it("builds secure WebSocket URLs and parses live candle messages", () => {

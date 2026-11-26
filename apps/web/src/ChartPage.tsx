@@ -1,64 +1,77 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Candle } from "@crypto-signal/shared";
-import {
-  SUPPORTED_TIMEFRAMES,
-  type MarketTimeframe
-} from "@crypto-signal/market-data";
+import type { MarketTimeframe } from "@crypto-signal/market-data";
+import { AnalysisView } from "./components/AnalysisView.js";
+import { EngineStatusView } from "./components/EngineStatusView.js";
 import { MarketChart } from "./components/MarketChart.js";
+import { PairPickerModal } from "./components/PairPickerModal.js";
 import { PaperDashboard } from "./PaperDashboard.js";
 import {
+  ORDERED_TIMEFRAMES,
+  endOfUtcDay,
+  formatPrice,
+  formatTimeframeLabel,
+  formatVolume,
+  mergeCandles,
+  normalizeChartSymbol,
+  startOfUtcDay,
+  summarizeTopDownAlignment,
+  type ChartTradeOverlay
+} from "./chart-state.js";
+import {
   fetchHistoricalCandles,
+  fetchMarketAnalysis,
+  fetchPlatformHealth,
   marketStreamUrl,
-  parseMarketStreamMessage
+  parseMarketStreamMessage,
+  type MarketAnalysisData,
+  type PlatformHealthBundle
 } from "./market-api.js";
 
+type AppTab = "chart" | "analysis" | "desk" | "engine";
 type ConnectionState = "loading" | "connecting" | "connected" | "reconnecting" | "historical" | "error";
 
-const SYMBOL_SUGGESTIONS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
+const DEFAULT_PAIRS = ["BTCUSDT", "BTCUSDC", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
 
-function mergeCandles(previous: readonly Candle[], incoming: readonly Candle[]): Candle[] {
-  const candlesByTime = new Map(previous.map((candle) => [candle.openTime, candle]));
-  for (const candle of incoming) candlesByTime.set(candle.openTime, candle);
-  return [...candlesByTime.values()]
-    .sort((left, right) => left.openTime - right.openTime)
-    .slice(-1000);
+function initialSymbolFromUrl(): string {
+  if (typeof window === "undefined") return "BTCUSDT";
+  const raw = new URLSearchParams(window.location.search).get("symbol");
+  return (raw && normalizeChartSymbol(raw)) || "BTCUSDT";
 }
 
-function formatPrice(value: string | undefined): string {
-  if (value === undefined) return "—";
-  return Number(value).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 8
-  });
-}
-
-function startOfUtcDay(value: string): number | undefined {
-  if (!value) return undefined;
-  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
-  return Number.isFinite(timestamp) ? timestamp : undefined;
-}
-
-function endOfUtcDay(value: string): number | undefined {
-  if (!value) return undefined;
-  const timestamp = Date.parse(`${value}T23:59:59.999Z`);
-  return Number.isFinite(timestamp) ? timestamp : undefined;
-}
-
-function isMarketTimeframe(value: string): value is MarketTimeframe {
-  return SUPPORTED_TIMEFRAMES.some((interval) => interval === value);
+function initialTabFromUrl(): AppTab {
+  if (typeof window === "undefined") return "chart";
+  const raw = new URLSearchParams(window.location.search).get("tab");
+  if (raw === "analysis" || raw === "desk" || raw === "engine") return raw;
+  return "chart";
 }
 
 export function ChartPage() {
-  const [symbolInput, setSymbolInput] = useState("BTCUSDT");
-  const [symbol, setSymbol] = useState("BTCUSDT");
+  const [activeTab, setActiveTab] = useState<AppTab>(initialTabFromUrl);
+  const [symbol, setSymbol] = useState<string>(initialSymbolFromUrl);
   const [timeframe, setTimeframe] = useState<MarketTimeframe>("5m");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>("loading");
-  const [connectionMessage, setConnectionMessage] = useState("Loading historical candles");
+  const [connectionMessage, setConnectionMessage] = useState("Loading");
   const [error, setError] = useState<string | null>(null);
+  const [showTools, setShowTools] = useState(false);
+  const [showSideRail, setShowSideRail] = useState(true);
+  const [showAutoOverlays, setShowAutoOverlays] = useState(true);
+  const [pairPickerOpen, setPairPickerOpen] = useState(false);
+  const [activeTradeOverlay, setActiveTradeOverlay] = useState<ChartTradeOverlay | null>(null);
+
+  const [analysis, setAnalysis] = useState<MarketAnalysisData | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisTick, setAnalysisTick] = useState(0);
+
+  const [health, setHealth] = useState<PlatformHealthBundle | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [healthTick, setHealthTick] = useState(0);
 
   const startTime = useMemo(() => startOfUtcDay(startDate), [startDate]);
   const endTime = useMemo(() => endOfUtcDay(endDate), [endDate]);
@@ -71,23 +84,35 @@ export function ChartPage() {
     Number(previousCandle.close) !== 0
     ? (change / Number(previousCandle.close)) * 100
     : undefined;
-  const dayStart = latestCandle ? latestCandle.closeTime - 86_400_000 : 0;
-  const candlesInDay = candles.filter((candle) => candle.closeTime >= dayStart);
-  const hasFullDay = candles[0] !== undefined && latestCandle !== undefined &&
-    candles[0].openTime <= dayStart;
-  const high24h = hasFullDay
-    ? Math.max(...candlesInDay.map((candle) => Number(candle.high)))
-    : undefined;
-  const low24h = hasFullDay
-    ? Math.min(...candlesInDay.map((candle) => Number(candle.low)))
-    : undefined;
+
+  const availablePairs = useMemo(() => {
+    const merged = new Set<string>([
+      ...(health?.signalEngine.watchlist ?? []),
+      ...DEFAULT_PAIRS
+    ]);
+    return [...merged];
+  }, [health]);
+
+  const topDownSummary = useMemo(
+    () => (analysis ? summarizeTopDownAlignment(analysis.timeframes) : null),
+    [analysis]
+  );
+
+  useEffect(() => {
+    const webApp = window.Telegram?.WebApp;
+    if (!webApp) return;
+    webApp.ready();
+    webApp.expand();
+    webApp.setHeaderColor?.("#12161c");
+    webApp.setBackgroundColor?.("#0b0e11");
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     setCandles([]);
     setError(null);
     setConnectionState("loading");
-    setConnectionMessage("Loading historical candles");
+    setConnectionMessage("Loading");
     fetchHistoricalCandles({
       symbol,
       timeframe,
@@ -96,17 +121,15 @@ export function ChartPage() {
       ...(endTime === undefined ? {} : { endTime })
     }, controller.signal)
       .then((result) => {
-        setCandles(result);
-        setConnectionMessage(result.length
-          ? `${result.length} historical candles loaded`
-          : "No candles returned for this date range");
+        setCandles((current) => mergeCandles(result, current));
+        setConnectionMessage(result.length ? "Live" : "No candles");
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
         const message = cause instanceof Error ? cause.message : String(cause);
         setError(message);
         setConnectionState("error");
-        setConnectionMessage("Market API unavailable");
+        setConnectionMessage("Unavailable");
       });
     return () => controller.abort();
   }, [symbol, timeframe, startTime, endTime, refreshVersion]);
@@ -115,7 +138,7 @@ export function ChartPage() {
     const historicalEndReached = endTime !== undefined && endTime < Date.now();
     if (historicalEndReached) {
       setConnectionState("historical");
-      setConnectionMessage("Historical date range selected");
+      setConnectionMessage("Historical");
       return;
     }
 
@@ -130,13 +153,14 @@ export function ChartPage() {
     const connect = () => {
       if (!active) return;
       setConnectionState("connecting");
+      setConnectionMessage("Connecting");
       const nextSocket = new WebSocket(marketStreamUrl(symbol, timeframe));
       socket = nextSocket;
       nextSocket.addEventListener("open", () => {
         if (!active) return;
         reconnectAttempt = 0;
         setConnectionState("connected");
-        setConnectionMessage("Live market stream connected");
+        setConnectionMessage("Live");
       });
       nextSocket.addEventListener("message", (event) => {
         if (!active || typeof event.data !== "string") return;
@@ -147,26 +171,24 @@ export function ChartPage() {
           } else if (message.type === "status") {
             upstreamConnected = message.status.connected;
             setConnectionState(message.status.connected ? "connected" : "reconnecting");
-            setConnectionMessage(message.status.connected
-              ? message.status.message
-              : `${message.status.message}; using REST polling`);
+            setConnectionMessage(message.status.connected ? "Live" : "Polling");
           } else {
             setError(message.message);
             setConnectionState("error");
-            setConnectionMessage(message.message);
+            setConnectionMessage("Error");
           }
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : String(cause));
         }
       });
       nextSocket.addEventListener("error", () => {
-        if (active) setConnectionMessage("Live stream interrupted; retrying");
+        if (active) setConnectionMessage("Retrying");
       });
       nextSocket.addEventListener("close", () => {
         if (!active) return;
         upstreamConnected = false;
         setConnectionState("reconnecting");
-        setConnectionMessage("Reconnecting to live market stream");
+        setConnectionMessage("Reconnecting");
         const delay = Math.min(1000 * 2 ** reconnectAttempt, 30_000);
         reconnectAttempt += 1;
         reconnectTimer = setTimeout(connect, delay);
@@ -189,7 +211,7 @@ export function ChartPage() {
       } catch (cause) {
         if (active && !controller.signal.aborted) {
           setConnectionState("error");
-          setConnectionMessage("Live stream and REST polling are unavailable");
+          setConnectionMessage("Unavailable");
           setError(cause instanceof Error ? cause.message : String(cause));
         }
       } finally {
@@ -206,156 +228,408 @@ export function ChartPage() {
     };
   }, [symbol, timeframe, startTime, endTime]);
 
-  function applyMarketSelection(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const normalized = symbolInput.trim().toUpperCase();
-    if (!/^[A-Z0-9]{6,20}$/.test(normalized)) {
-      setError("Enter a valid market symbol such as BTCUSDT.");
-      return;
+  useEffect(() => {
+    const controller = new AbortController();
+    setAnalysisLoading(true);
+    setAnalysisError(null);
+    fetchMarketAnalysis(symbol, controller.signal)
+      .then((result) => {
+        setAnalysis(result);
+        setAnalysisLoading(false);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setAnalysisError(cause instanceof Error ? cause.message : String(cause));
+        setAnalysisLoading(false);
+      });
+    return () => controller.abort();
+  }, [symbol, analysisTick]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setHealthLoading(true);
+    setHealthError(null);
+    fetchPlatformHealth(controller.signal)
+      .then((result) => {
+        setHealth(result);
+        setHealthLoading(false);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setHealthError(cause instanceof Error ? cause.message : String(cause));
+        setHealthLoading(false);
+      });
+    return () => controller.abort();
+  }, [healthTick]);
+
+  const handleSelectSymbol = useCallback((nextSymbol: string) => {
+    setSymbol(nextSymbol);
+    if (activeTradeOverlay && activeTradeOverlay.symbol !== nextSymbol) {
+      setActiveTradeOverlay(null);
     }
+  }, [activeTradeOverlay]);
+
+  const handlePlotTrade = useCallback((overlay: ChartTradeOverlay) => {
+    setSymbol(overlay.symbol);
+    setTimeframe("5m");
+    setActiveTradeOverlay(overlay);
+    setActiveTab("chart");
+  }, []);
+
+  function applyDateRange(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
     if (startDate && endDate && startDate > endDate) {
       setError("The start date must be on or before the end date.");
       return;
     }
     setError(null);
-    setSymbol(normalized);
+    setRefreshVersion((version) => version + 1);
   }
 
-  const statusClass = `status-indicator status-${connectionState}`;
+  const dateControls = (
+    <form className="date-range-form" onSubmit={applyDateRange}>
+      <label>
+        <span>From (UTC)</span>
+        <input
+          type="date"
+          value={startDate}
+          onChange={(event) => setStartDate(event.target.value)}
+        />
+      </label>
+      <label>
+        <span>To (UTC)</span>
+        <input
+          type="date"
+          value={endDate}
+          onChange={(event) => setEndDate(event.target.value)}
+        />
+      </label>
+      <button type="submit">Apply range</button>
+      {(startDate || endDate) && (
+        <button
+          type="button"
+          className="quiet-button"
+          onClick={() => {
+            setStartDate("");
+            setEndDate("");
+          }}
+        >
+          Live latest
+        </button>
+      )}
+    </form>
+  );
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="/" aria-label="Signal Desk home">
-          <span className="brand-mark">S</span>
-          <span>signal<span className="brand-light">desk</span></span>
-        </a>
-        <nav className="primary-nav" aria-label="Main navigation">
-          <a className="selected" href="#chart">Markets</a>
-          <a href="#performance">Performance</a>
-        </nav>
-        <div className="topbar-status">
-          <span className={statusClass} />
-          <span>{connectionState === "connected" ? "Live" : connectionState}</span>
-        </div>
-      </header>
-
-      <section className="market-controls" aria-label="Market selection">
-        <form className="market-form" onSubmit={applyMarketSelection}>
-          <label className="control-symbol">
-            <span>Market</span>
-            <input
-              aria-label="Symbol"
-              list="market-suggestions"
-              value={symbolInput}
-              onChange={(event) => setSymbolInput(event.target.value)}
-              spellCheck={false}
-            />
-            <datalist id="market-suggestions">
-              {SYMBOL_SUGGESTIONS.map((suggestion) => (
-                <option key={suggestion} value={suggestion} />
-              ))}
-            </datalist>
-          </label>
-          <label>
-            <span>Timeframe</span>
-            <select
-              value={timeframe}
-              onChange={(event) => {
-                if (isMarketTimeframe(event.target.value)) setTimeframe(event.target.value);
-              }}
-            >
-              {SUPPORTED_TIMEFRAMES.map((interval) => (
-                <option key={interval} value={interval}>
-                  {interval === "1M" ? "1 month" : interval}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>From (UTC)</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(event) => setStartDate(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>To (UTC)</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(event) => setEndDate(event.target.value)}
-            />
-          </label>
-          <button type="submit" className="apply-button">Load chart</button>
+      <header className="app-topbar">
+        <div className="topbar-zone-brand">
+          <a
+            className="brand"
+            href="/"
+            onClick={(event) => {
+              event.preventDefault();
+              setActiveTab("chart");
+            }}
+          >
+            Signal Desk
+          </a>
           <button
             type="button"
-            className="refresh-button"
-            onClick={() => setRefreshVersion((version) => version + 1)}
-            aria-label="Refresh historical candles"
+            className="mobile-pair-trigger"
+            onClick={() => setPairPickerOpen(true)}
+            aria-label={`Change trading pair, currently ${symbol}`}
+          >
+            <strong className="mono-label">{symbol}</strong>
+            <span aria-hidden="true">▾</span>
+          </button>
+        </div>
+
+        <nav className="desktop-nav" aria-label="Primary views">
+          {(
+            [
+              ["chart", "Chart"],
+              ["analysis", "Analysis"],
+              ["desk", "Paper Desk"],
+              ["engine", "Engine"]
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={activeTab === id ? "nav-tab active" : "nav-tab"}
+              onClick={() => setActiveTab(id)}
+              aria-current={activeTab === id ? "page" : undefined}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="topbar-zone-right">
+          <div className="ticker-readout">
+            <strong className="ticker-price">{formatPrice(latestCandle?.close)}</strong>
+            {changePercent !== undefined && (
+              <span className={changePercent >= 0 ? "positive-change" : "negative-change"}>
+                {changePercent >= 0 ? "+" : ""}{changePercent.toFixed(2)}%
+              </span>
+            )}
+          </div>
+          <span className="mobile-stream-label" role="status">
+            {connectionMessage}
+          </span>
+          <button
+            type="button"
+            className="desktop-pair-cta"
+            onClick={() => setPairPickerOpen(true)}
+          >
+            <span className="mono-label">{symbol}</span>
+            <span aria-hidden="true">▾</span>
+          </button>
+          <button
+            type="button"
+            className="mobile-refresh-btn"
+            onClick={() => {
+              setRefreshVersion((v) => v + 1);
+              setAnalysisTick((v) => v + 1);
+            }}
+            aria-label="Refresh market data"
           >
             ↻
           </button>
-        </form>
-      </section>
+        </div>
+      </header>
 
-      <section className="market-summary" id="chart">
-        <div className="pair-heading">
-          <span className="coin-icon">{symbol.slice(0, 1)}</span>
-          <div>
-            <h1>{symbol}</h1>
-            <span className="pair-subtitle">Binance Spot · {timeframe === "1M" ? "1 month" : timeframe}</span>
+      {error && (
+        <div className="chart-error-strip" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">
+            ×
+          </button>
+        </div>
+      )}
+
+      {activeTab === "chart" && (
+        <div className="chart-workspace">
+          <div className="workspace-toolbar">
+            <div className="toolbar-left">
+              <div className="timeframe-bar" role="group" aria-label="Timeframe">
+                {ORDERED_TIMEFRAMES.map((interval) => (
+                  <button
+                    key={interval}
+                    type="button"
+                    className={timeframe === interval ? "tf-button active" : "tf-button"}
+                    onClick={() => setTimeframe(interval)}
+                    aria-pressed={timeframe === interval}
+                  >
+                    {formatTimeframeLabel(interval)}
+                  </button>
+                ))}
+              </div>
+              {latestCandle && (
+                <div className="ohlc-readout">
+                  <span>O {formatPrice(latestCandle.open)}</span>
+                  <span>H {formatPrice(latestCandle.high)}</span>
+                  <span>L {formatPrice(latestCandle.low)}</span>
+                  <span>Vol {formatVolume(latestCandle.volume)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="toolbar-right">
+              <span className={`stream-text stream-${connectionState}`}>
+                {connectionMessage}
+              </span>
+              <button
+                type="button"
+                className={showAutoOverlays ? "bar-button active" : "bar-button"}
+                onClick={() => setShowAutoOverlays((value) => !value)}
+                aria-pressed={showAutoOverlays}
+              >
+                4H Lines
+              </button>
+              <button
+                type="button"
+                className={showTools ? "bar-button active" : "bar-button"}
+                onClick={() => setShowTools((open) => !open)}
+                aria-expanded={showTools}
+              >
+                Draw
+              </button>
+              <button
+                type="button"
+                className={showSideRail ? "bar-button desktop-only-btn active" : "bar-button desktop-only-btn"}
+                onClick={() => setShowSideRail((open) => !open)}
+                aria-pressed={showSideRail}
+              >
+                {showSideRail ? "Hide Intel" : "Show Intel"}
+              </button>
+            </div>
+          </div>
+
+          <div className="chart-split-stage">
+            <div className="chart-main-pane">
+              <MarketChart
+                candles={candles}
+                marketKey={`${symbol}:${timeframe}:${startDate}:${endDate}`}
+                showTools={showTools}
+                onCloseTools={() => setShowTools(false)}
+                dateControls={dateControls}
+                autoTrendlines={analysis?.fourHourTrendlines ?? []}
+                swingLevels={analysis?.swingLevels ?? []}
+                showAutoOverlays={showAutoOverlays}
+                activeTradeOverlay={activeTradeOverlay}
+                onClearTradeOverlay={() => setActiveTradeOverlay(null)}
+              />
+            </div>
+
+            {showSideRail && (
+              <aside className="intel-side-rail" aria-label="Live market intelligence">
+                <div className="rail-watchlist">
+                  <div className="subblock-header">
+                    <h3>Quick Pairs</h3>
+                    <span className="muted-meta">Binance Spot</span>
+                  </div>
+                  <div className="quick-pair-grid">
+                    {availablePairs.slice(0, 6).map((pair) => (
+                      <button
+                        key={pair}
+                        type="button"
+                        className={pair === symbol ? "quick-pair-btn active" : "quick-pair-btn"}
+                        onClick={() => handleSelectSymbol(pair)}
+                      >
+                        {pair}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {topDownSummary && (
+                  <div className="rail-bias-strip">
+                    <span className="muted-meta">Top-Down Consensus</span>
+                    <strong
+                      className={
+                        topDownSummary.dominantRegime === "bullish"
+                          ? "tone-bullish"
+                          : topDownSummary.dominantRegime === "bearish"
+                            ? "tone-bearish"
+                            : topDownSummary.dominantRegime === "mixed"
+                              ? "tone-caution"
+                              : "tone-neutral"
+                      }
+                    >
+                      {topDownSummary.dominantRegime === "mixed"
+                        ? `${topDownSummary.bullishCount} Bullish · ${topDownSummary.bearishCount} Bearish`
+                        : `${topDownSummary.alignedCount}/${topDownSummary.totalAvailable} ${topDownSummary.dominantRegime}`}
+                    </strong>
+                  </div>
+                )}
+
+                <AnalysisView
+                  symbol={symbol}
+                  analysis={analysis}
+                  loading={analysisLoading}
+                  error={analysisError}
+                  compact
+                  onRefresh={() => setAnalysisTick((v) => v + 1)}
+                  onPlotTrade={handlePlotTrade}
+                  onOpenChartWithAutoLines={() => {
+                    setShowAutoOverlays(true);
+                    setActiveTab("chart");
+                  }}
+                />
+              </aside>
+            )}
           </div>
         </div>
-        <div className="price-summary">
-          <strong>{formatPrice(latestCandle?.close)}</strong>
-          {changePercent !== undefined && (
-            <span className={changePercent >= 0 ? "positive-change" : "negative-change"}>
-              {changePercent >= 0 ? "+" : ""}{changePercent.toFixed(2)}%
-            </span>
-          )}
-        </div>
-        <div className="summary-stat">
-          <span>24h high / low</span>
-          <strong>{high24h === undefined || low24h === undefined
-            ? "—"
-            : `${formatPrice(String(high24h))} / ${formatPrice(String(low24h))}`
-          }</strong>
-        </div>
-        <div className="summary-stat">
-          <span>Candle end (UTC)</span>
-          <strong>
-            {latestCandle
-              ? `${new Date(latestCandle.closeTime).toLocaleTimeString("en-GB", { timeZone: "UTC" })} · ${latestCandle.closed ? "Closed" : "In progress"}`
-              : "—"}
-          </strong>
-        </div>
-        <div className="summary-stat">
-          <span>Interval change</span>
-          <strong className={change !== undefined && change >= 0 ? "positive-change" : "negative-change"}>
-            {change === undefined ? "—" : `${change >= 0 ? "+" : ""}${formatPrice(String(change))}`}
-          </strong>
-        </div>
-      </section>
+      )}
 
-      <div className="connection-banner" role="status">
-        <span className={statusClass} />
-        <span>{connectionMessage}</span>
-        {error && <span className="connection-error">{error}</span>}
-      </div>
+      {activeTab === "analysis" && (
+        <AnalysisView
+          symbol={symbol}
+          analysis={analysis}
+          loading={analysisLoading}
+          error={analysisError}
+          onRefresh={() => setAnalysisTick((v) => v + 1)}
+          onPlotTrade={handlePlotTrade}
+          onOpenChartWithAutoLines={() => {
+            setShowAutoOverlays(true);
+            setActiveTab("chart");
+          }}
+        />
+      )}
 
-      <MarketChart
-        candles={candles}
-        marketKey={`${symbol}:${timeframe}:${startDate}:${endDate}`}
+      {activeTab === "desk" && (
+        <PaperDashboard
+          health={health}
+          onPlotTrade={handlePlotTrade}
+          onOpenEngineStatus={() => setActiveTab("engine")}
+        />
+      )}
+
+      {activeTab === "engine" && (
+        <EngineStatusView
+          health={health}
+          loading={healthLoading}
+          error={healthError}
+          onRefresh={() => setHealthTick((v) => v + 1)}
+          onSelectSymbol={(nextSymbol) => {
+            handleSelectSymbol(nextSymbol);
+            setActiveTab("chart");
+          }}
+        />
+      )}
+
+      <nav className="mobile-bottom-nav" aria-label="Telegram Mini App navigation">
+        <button
+          type="button"
+          className={activeTab === "chart" ? "bottom-nav-item active" : "bottom-nav-item"}
+          onClick={() => setActiveTab("chart")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 4v16M7 8h-2v6h2M17 3v18M17 9h2v5h-2M12 6v12M12 10h2v4h-2" />
+          </svg>
+          <span>Chart</span>
+        </button>
+        <button
+          type="button"
+          className={activeTab === "analysis" ? "bottom-nav-item active" : "bottom-nav-item"}
+          onClick={() => setActiveTab("analysis")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 18l5-6 4 3 7-9M16 6h4v4" />
+          </svg>
+          <span>Analysis</span>
+        </button>
+        <button
+          type="button"
+          className={activeTab === "desk" ? "bottom-nav-item active" : "bottom-nav-item"}
+          onClick={() => setActiveTab("desk")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16v12H4zM8 7V5h8v2M4 12h16" />
+          </svg>
+          <span>Desk</span>
+        </button>
+        <button
+          type="button"
+          className={activeTab === "engine" ? "bottom-nav-item active" : "bottom-nav-item"}
+          onClick={() => setActiveTab("engine")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 12h4l3-7 4 14 3-7h4" />
+          </svg>
+          <span>Engine</span>
+        </button>
+      </nav>
+
+      <PairPickerModal
+        open={pairPickerOpen}
+        currentSymbol={symbol}
+        pairs={availablePairs}
+        onSelect={handleSelectSymbol}
+        onClose={() => setPairPickerOpen(false)}
       />
-
-      <PaperDashboard />
-
-      <footer className="app-footer">
-        <span>Market data served by the platform API from Binance public endpoints.</span>
-        <span>Paper trading only · No exchange orders</span>
-      </footer>
     </main>
   );
 }

@@ -9,6 +9,8 @@
   ],
   "scripts": {
     "build": "tsc -b && npm run bundle --workspace apps/web",
+    "dev": "npm run build && SERVE_WEB_ASSETS=true PORT=3000 HOST=0.0.0.0 node apps/api/dist/main.js",
+    "start": "SERVE_WEB_ASSETS=true PORT=3000 HOST=0.0.0.0 node apps/api/dist/main.js",
     "test": "vitest run",
     "check": "npm run build && npm test"
   },

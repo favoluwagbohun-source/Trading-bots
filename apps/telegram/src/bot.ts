@@ -20,6 +20,7 @@ const BOT_COMMANDS: readonly TelegramBotCommand[] = [
 
 export interface TelegramPollingBotOptions {
   readonly webAppUrl?: string;
+  readonly onPollSuccess?: () => void;
   readonly onError?: (error: unknown) => void;
 }
 
@@ -71,6 +72,7 @@ export class TelegramPollingBot {
         try {
           const updates = await this.api.getUpdates(this.offset, controller.signal);
           delay = 1000;
+          this.options.onPollSuccess?.();
           if (updates.length === 0) {
             await abortableDelay(250, controller.signal);
             continue;

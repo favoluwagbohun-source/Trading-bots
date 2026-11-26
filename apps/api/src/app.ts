@@ -1,4 +1,5 @@
 import { extname } from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -13,10 +14,18 @@ import {
 } from "@crypto-signal/market-data";
 import WebSocket from "ws";
 import {
+  getMarketDataHealth,
+  getOverallHealth,
+  getSignalEngineHealth,
+  getTelegramHealth,
+  type HealthReadOptions
+} from "./health.js";
+import {
   getPaperDashboard,
   TelegramAuthorizationError,
   type PaperDashboardOptions
 } from "./paper-dashboard.js";
+import { LiveMarketAnalysisService } from "./market-analysis.js";
 
 interface MarketQuery {
   readonly symbol?: string;
@@ -31,12 +40,19 @@ interface MarketStreamQuery {
   readonly timeframe?: string;
 }
 
+interface RateLimitConfig {
+  readonly max: number;
+  readonly windowMs: number;
+}
+
 interface ApiDependencies {
   readonly restClient?: Pick<BinanceRestClient, "getHistoricalKlines">;
   readonly streamFactory?: (options: StreamOptions) => Pick<BinanceKlineStream, "start" | "stop">;
   readonly paperDashboard?: Omit<PaperDashboardOptions, "botToken"> & {
     readonly botToken?: string;
   };
+  readonly health?: HealthReadOptions;
+  readonly rateLimit?: RateLimitConfig | false;
   readonly staticDirectory?: string;
   readonly logger?: boolean;
 }
@@ -148,7 +164,9 @@ export async function createApiServer(
       socketFactory: (url) => new NodeKlineSocket(url)
     }));
   const staticDirectory = dependencies.staticDirectory ??
-    (process.env.SERVE_WEB_ASSETS === "true" ? "/app/apps/web/dist" : undefined);
+    (process.env.SERVE_WEB_ASSETS === "true"
+      ? fileURLToPath(new URL("../../web/dist", import.meta.url))
+      : undefined);
 
   await app.register(websocket);
   if (staticDirectory) {
@@ -158,7 +176,50 @@ export async function createApiServer(
     });
   }
 
-  app.get("/health", async () => ({ status: "ok" }));
+  const processStartedAt = Date.now();
+  const healthOptions: HealthReadOptions = {
+    processStartedAt,
+    ...dependencies.health
+  };
+
+  if (dependencies.rateLimit !== false) {
+    const envMax = Number(process.env.API_RATE_LIMIT_MAX ?? 120);
+    const max = dependencies.rateLimit?.max ??
+      (Number.isInteger(envMax) && envMax > 0 ? envMax : 120);
+    const windowMs = dependencies.rateLimit?.windowMs ?? 60_000;
+    const buckets = new Map<string, { count: number; resetAt: number }>();
+    app.addHook("onRequest", async (request, reply) => {
+      const pathname = new URL(request.url, "http://localhost").pathname;
+      if (!pathname.startsWith("/api/") || pathname === "/api/market/stream") return;
+      const nowMs = Date.now();
+      const key = request.ip || "unknown";
+      const existing = buckets.get(key);
+      if (!existing || nowMs >= existing.resetAt) {
+        if (buckets.size > 1000) {
+          for (const [bucketKey, bucket] of buckets) {
+            if (nowMs >= bucket.resetAt) buckets.delete(bucketKey);
+          }
+        }
+        buckets.set(key, { count: 1, resetAt: nowMs + windowMs });
+        return;
+      }
+      existing.count += 1;
+      if (existing.count > max) {
+        const retryAfterSeconds = Math.max(1, Math.ceil((existing.resetAt - nowMs) / 1000));
+        reply.header("Retry-After", String(retryAfterSeconds));
+        return reply.code(429).send({ error: "Rate limit exceeded. Try again shortly." });
+      }
+    });
+  }
+
+  app.get("/ping", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return { status: "ok", timestamp: Date.now() };
+  });
+  app.get("/health", async () => getOverallHealth(healthOptions));
+  app.get("/health/market-data", async () => getMarketDataHealth(healthOptions));
+  app.get("/health/signal-engine", async () => getSignalEngineHealth(healthOptions));
+  app.get("/health/telegram", async () => getTelegramHealth(healthOptions));
 
   app.get("/api/paper/dashboard", async (request, reply) => {
     const botToken = dependencies.paperDashboard?.botToken ?? process.env.TELEGRAM_BOT_TOKEN;
@@ -190,6 +251,8 @@ export async function createApiServer(
     }
   });
 
+  const analysisService = new LiveMarketAnalysisService(restClient);
+
   app.get<{ Querystring: MarketQuery }>(
     "/api/market/klines",
     async (request, reply) => {
@@ -206,6 +269,28 @@ export async function createApiServer(
       } catch (error) {
         request.log.error({ err: error }, "Failed to fetch historical market candles");
         return reply.code(502).send({ error: "Historical market data is unavailable" });
+      }
+    }
+  );
+
+  app.get<{ Querystring: { readonly symbol?: string } }>(
+    "/api/market/analysis",
+    async (request, reply) => {
+      let symbol: string;
+      try {
+        if (!request.query.symbol) {
+          throw new Error("symbol is required");
+        }
+        symbol = normalizeSymbol(request.query.symbol);
+      } catch (error) {
+        return reply.code(400).send({ error: String(error) });
+      }
+
+      try {
+        return await analysisService.getAnalysis(symbol);
+      } catch (error) {
+        request.log.error({ err: error }, "Failed to compute live market analysis");
+        return reply.code(502).send({ error: "Market analysis is temporarily unavailable" });
       }
     }
   );

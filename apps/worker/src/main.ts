@@ -7,13 +7,20 @@ import {
 } from "@crypto-signal/telegram";
 import type { PortfolioLimits, TradingCosts } from "@crypto-signal/risk-engine";
 import { ApprovedPaperSignalCoordinator } from "./approved-paper-signal-coordinator.js";
+import { recoverMissingCandles } from "./candle-recovery.js";
+import {
+  HeartbeatPinger,
+  parseHeartbeatIntervalMs,
+  resolveHeartbeatUrl
+} from "./heartbeat-pinger.js";
 import { PaperTradeLedger } from "./paper-trade-ledger.js";
 import { scoreSignalQuality, type SignalGrade, type StrategyQualityEvidence } from "./signal-quality.js";
 import { SignalScanner, type SignalCandidate } from "./signal-scanner.js";
+import { WorkerHealthStore } from "./worker-health.js";
 
 function parseWatchlist(value: string | undefined): string[] {
   if (!value) throw new Error("Set WATCHLIST_SYMBOLS to a comma-separated Binance symbol list");
-  return value.split(",").map((symbol) => symbol.trim()).filter(Boolean);
+  return value.split(",").map((symbol) => symbol.trim().toUpperCase()).filter(Boolean);
 }
 
 function parseScanInterval(value: string | undefined): number {
@@ -103,6 +110,18 @@ function parseQualityEvidence(
   return result;
 }
 
+function snapshotLastProcessedOpenTimes(
+  symbols: readonly string[],
+  ledger: PaperTradeLedger
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const symbol of symbols) {
+    const openTime = ledger.getLastProcessedOpenTime(symbol);
+    if (openTime !== undefined) result[symbol] = openTime;
+  }
+  return result;
+}
+
 const controller = new AbortController();
 const watchlist = parseWatchlist(process.env.WATCHLIST_SYMBOLS);
 const scanIntervalMs = parseScanInterval(process.env.SCAN_INTERVAL_MS);
@@ -112,8 +131,16 @@ const tradeLedger = new PaperTradeLedger({
 });
 const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
 const statePath = process.env.TELEGRAM_STATE_PATH?.trim() || "./data/telegram-state.json";
+const workerHealthPath = process.env.WORKER_HEALTH_PATH?.trim() || "./data/worker-health.json";
 const states = token ? new TelegramUserStateStore({ filePath: statePath }) : undefined;
 const api = token ? new TelegramApiClient(token) : undefined;
+const workerHealth = new WorkerHealthStore({
+  filePath: workerHealthPath,
+  watchlist,
+  scanIntervalMs,
+  telegramConfigured: Boolean(token),
+  secrets: token ? [token] : []
+});
 const qualityEvidence = parseQualityEvidence(process.env.STRATEGY_QUALITY_EVIDENCE);
 const portfolioLimits: PortfolioLimits = {
   maximumOpenTrades: configuredInteger("PAPER_MAX_OPEN_TRADES", 3),
@@ -124,6 +151,9 @@ const portfolioLimits: PortfolioLimits = {
 };
 let coordinator: ApprovedPaperSignalCoordinator | undefined;
 let bot: TelegramPollingBot | undefined;
+
+const pendingNotificationCount = (): number =>
+  tradeLedger.getEvents({ deliveryStatus: "pending" }).length;
 
 if (states && api) {
   const costs: TradingCosts = {
@@ -142,6 +172,15 @@ if (states && api) {
     onRejected: (chatId, candidate, reason) => {
       const owner = chatId === undefined ? "all opted-in users" : `chat ${chatId}`;
       console.info(`Paper entry rejected for ${owner}: ${candidate.signalId}: ${reason}.`);
+    },
+    onDeliverySuccess: () => {
+      workerHealth.recordTelegramDeliverySuccess(pendingNotificationCount());
+    },
+    onDeliveryError: (eventId, error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const safeMessage = token ? message.split(token).join("[REDACTED]") : message;
+      console.error(`Telegram delivery failed for ${eventId}: ${safeMessage}`);
+      workerHealth.recordTelegramDeliveryError(error, pendingNotificationCount());
     }
   });
   const commands = new TelegramCommandService(api, {
@@ -160,10 +199,14 @@ if (states && api) {
     ...(process.env.TELEGRAM_WEB_APP_URL === undefined
       ? {}
       : { webAppUrl: process.env.TELEGRAM_WEB_APP_URL }),
+    onPollSuccess: () => {
+      workerHealth.recordTelegramPollSuccess(pendingNotificationCount());
+    },
     onError: (error) => {
       const message = error instanceof Error ? error.message : String(error);
       const safeMessage = token ? message.split(token).join("[REDACTED]") : message;
       console.error("Telegram polling error:", safeMessage);
+      workerHealth.recordTelegramPollError(error, pendingNotificationCount());
     }
   });
 } else {
@@ -173,10 +216,31 @@ if (Object.keys(qualityEvidence).length === 0) {
   console.warn("No strategy validation evidence configured; automatic paper entries will be quality-gated.");
 }
 
+async function processClosedCandles(
+  symbol: string,
+  candles: readonly import("@crypto-signal/shared").Candle[]
+): Promise<void> {
+  if (coordinator) {
+    await coordinator.processClosedCandles(symbol, candles);
+    return;
+  }
+  for (const event of tradeLedger.processClosedCandles(symbol, candles)) {
+    console.info(
+      `Paper-trade event pending: ${event.symbol} ${event.type} for signal ${event.signalId}.`
+    );
+  }
+}
+
 const scanner = new SignalScanner({
   symbols: watchlist,
   client: marketData,
   scanIntervalMs,
+  onScanStart: () => {
+    workerHealth.recordScanStarted();
+  },
+  onMarketDataSuccess: () => {
+    workerHealth.recordMarketDataSuccess(marketData.skippedNoTradeCandleCount);
+  },
   onCandidate: async (candidate) => {
     const quality = scoreSignalQuality(candidate, qualityEvidence[candidate.strategy]);
     console.info(
@@ -184,32 +248,71 @@ const scanner = new SignalScanner({
     );
     if (coordinator) await coordinator.processCandidate(candidate);
   },
-  onCandles: async (symbol, candles) => {
-    if (coordinator) {
-      await coordinator.processClosedCandles(symbol, candles);
-      return;
-    }
-    for (const event of tradeLedger.processClosedCandles(symbol, candles)) {
-      console.info(
-        `Paper-trade event pending: ${event.symbol} ${event.type} for signal ${event.signalId}.`
-      );
-    }
-  },
+  onCandles: processClosedCandles,
   onError: (symbol, error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Scan failed for ${symbol}: ${message}`);
+    workerHealth.recordMarketDataError(error, marketData.skippedNoTradeCandleCount);
+  },
+  onScanComplete: ({ hadError, lastError }) => {
+    workerHealth.recordScanCompleted({
+      lastProcessedOpenTimeBySymbol: snapshotLastProcessedOpenTimes(watchlist, tradeLedger),
+      activePaperTradeCount: tradeLedger.getActiveTrades().length,
+      pendingEventCount: pendingNotificationCount(),
+      hadSymbolErrors: hadError,
+      lastError
+    });
   }
 });
 
-process.once("SIGINT", () => {
+function shutdown(): void {
+  workerHealth.markSleeping();
   controller.abort();
   bot?.stop();
+}
+
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
+
+const recovery = await recoverMissingCandles({
+  symbols: watchlist,
+  marketData,
+  getLastProcessedOpenTime: (symbol) => tradeLedger.getLastProcessedOpenTime(symbol),
+  onCandles: processClosedCandles,
+  onInfo: (message) => console.info(message),
+  onError: (symbol, error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Startup candle recovery failed for ${symbol}: ${message}`);
+    workerHealth.recordMarketDataError(error, marketData.skippedNoTradeCandleCount);
+  }
 });
-process.once("SIGTERM", () => {
-  controller.abort();
-  bot?.stop();
+workerHealth.recordRecoveryComplete({
+  lastProcessedOpenTimeBySymbol: snapshotLastProcessedOpenTimes(watchlist, tradeLedger),
+  activePaperTradeCount: tradeLedger.getActiveTrades().length,
+  pendingEventCount: pendingNotificationCount(),
+  hadError: recovery.hadError,
+  lastError: recovery.lastError
 });
+
+const heartbeatUrl = resolveHeartbeatUrl(process.env);
+const heartbeatIntervalMs = parseHeartbeatIntervalMs(process.env.HEARTBEAT_INTERVAL_MS);
+const heartbeatPinger = heartbeatUrl
+  ? new HeartbeatPinger({
+      targetUrl: heartbeatUrl,
+      intervalMs: heartbeatIntervalMs,
+      onError: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const safeMessage = token ? message.split(token).join("[REDACTED]") : message;
+        console.warn(`Heartbeat ping failed (${heartbeatUrl}): ${safeMessage}`);
+      }
+    })
+  : undefined;
+
+if (heartbeatPinger && heartbeatUrl) {
+  console.info(`Worker heartbeat pinger enabled for ${heartbeatUrl} every ${heartbeatIntervalMs}ms.`);
+}
 
 const tasks: Promise<void>[] = [scanner.run(controller.signal)];
 if (bot) tasks.push(bot.run());
+if (heartbeatPinger) tasks.push(heartbeatPinger.run(controller.signal));
 await Promise.all(tasks);

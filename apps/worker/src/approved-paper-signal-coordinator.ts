@@ -35,6 +35,8 @@ export interface ApprovedPaperSignalCoordinatorOptions {
     candidate: SignalCandidate,
     reason: string
   ) => void;
+  readonly onDeliverySuccess?: (eventId: string) => void;
+  readonly onDeliveryError?: (eventId: string, error: unknown) => void;
 }
 
 interface UserApproval {
@@ -202,8 +204,14 @@ export class ApprovedPaperSignalCoordinator {
         qualityScore: quality.score,
         strategyGrade: quality.strategyGrade
       };
-      await this.publisher.publishSignal(chatId, prepared, chart);
-      this.options.ledger.markEventDelivered(event.eventId);
+      try {
+        const published = await this.publisher.publishSignal(chatId, prepared, chart);
+        this.options.ledger.markEventDelivered(event.eventId);
+        if (published) this.options.onDeliverySuccess?.(event.eventId);
+      } catch (error) {
+        this.options.ledger.releaseEventClaim(event.eventId);
+        this.options.onDeliveryError?.(event.eventId, error);
+      }
     }
   }
 
@@ -320,15 +328,23 @@ export class ApprovedPaperSignalCoordinator {
     for (const event of events) {
       const trade = this.options.ledger.getTrade(event.chatId, event.signalId);
       if (!trade) continue;
-      const candidate = candidateForTradeEvent(trade, event.snapshotId, candles);
-      const chart = renderSignalChart(candidate);
-      if (!this.options.ledger.claimEventDelivery(event.eventId)) continue;
-      await this.publisher.publishTradeUpdate(
-        event.chatId,
-        paperTradeUpdate(trade, event),
-        chart
-      );
-      this.options.ledger.markEventDelivered(event.eventId);
+      let claimed = false;
+      try {
+        const candidate = candidateForTradeEvent(trade, event.snapshotId, candles);
+        const chart = renderSignalChart(candidate);
+        if (!this.options.ledger.claimEventDelivery(event.eventId)) continue;
+        claimed = true;
+        const published = await this.publisher.publishTradeUpdate(
+          event.chatId,
+          paperTradeUpdate(trade, event),
+          chart
+        );
+        this.options.ledger.markEventDelivered(event.eventId);
+        if (published) this.options.onDeliverySuccess?.(event.eventId);
+      } catch (error) {
+        if (claimed) this.options.ledger.releaseEventClaim(event.eventId);
+        this.options.onDeliveryError?.(event.eventId, error);
+      }
     }
   }
 }

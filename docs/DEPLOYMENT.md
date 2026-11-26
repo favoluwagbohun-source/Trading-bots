@@ -78,24 +78,71 @@ facility if the deployment platform provides one.
 The application only uses Binance public market data and simulated paper
 trades. It does not configure exchange credentials or submit real orders.
 
-## Render Free
+## Render Free vs. Always-On Render
 
-The root `render.yaml` provides a single free Docker web service. It runs the
-API, static frontend, and scanner/Telegram worker in one container; the API
-serves `/health`, the UI, and `/api/*` from the same origin. Connect the
-repository in Render using **New > Blueprint** and deploy the `render.yaml`
-configuration.
+Render Free web services (`render.yaml`) spin down after 15 minutes without
+inbound HTTP traffic and use an ephemeral filesystem. To reduce free-tier
+inactivity sleep, `render.yaml` enables the worker's interval-based HTTP
+heartbeat (`HEARTBEAT_ENABLED=true`, `HEARTBEAT_INTERVAL_MS=600000`), which
+periodically requests `HEARTBEAT_URL`, `${RENDER_EXTERNAL_URL}/ping`, or the
+local `/ping` endpoint. Note that Render Free still uses an ephemeral
+filesystem, so JSON paper-trade and user state can still be lost on container
+restarts or redeploys.
 
-Free web services sleep after a period without inbound requests and have an
-ephemeral filesystem. The scanner is therefore not guaranteed to run while
-the service sleeps, and JSON paper-trade/user state can be lost when Render
-restarts or redeploys the container. This configuration does not attempt to
-prevent sleep. For continuous scanning and durable paper-trade state, use an
-always-on worker and persistent storage on an appropriate paid plan.
+### Always-On Render Blueprint (`render.always-on.yaml`)
 
-After the first deploy, set `TELEGRAM_BOT_TOKEN` and set
-`TELEGRAM_WEB_APP_URL` to the service's public HTTPS URL in Render's
-environment settings if Telegram features are wanted. Keep
-`STRATEGY_QUALITY_EVIDENCE` empty until evidence has been independently
-validated; paper entries remain quality-gated without supported evidence.
-Check the Render service logs and `/health` endpoint after each deploy.
+For genuine always-on operation on Render with persistent JSON state across
+deploys and restarts:
+
+1. Deploy `render.always-on.yaml` in Render (**New > Blueprint** and select
+   `render.always-on.yaml`). It configures `plan: starter` (no inactivity
+   sleep) and mounts a persistent disk at `/app/data`.
+2. In Render environment settings, configure `TELEGRAM_BOT_TOKEN`,
+   `TELEGRAM_WEB_APP_URL` (the service's public HTTPS URL), and optionally
+   `STRATEGY_QUALITY_EVIDENCE` once strategy evidence is independently
+   validated.
+3. Configure an external uptime monitor (for example, UptimeRobot or Better
+   Stack) against `GET /health` and `GET /health/signal-engine` to alert if the
+   service or scanner degrades, disconnects, or sleeps.
+
+### Free Demo Deployment (`render.yaml`)
+
+The root `render.yaml` configures `plan: free` with `HEARTBEAT_ENABLED=true`
+and `HEARTBEAT_INTERVAL_MS=600000`, running the API, static frontend, and
+scanner/Telegram worker in one container and serving `/ping`, `/health`, the UI,
+and `/api/*` from the same origin.
+
+Worker heartbeat environment variables:
+
+- `HEARTBEAT_ENABLED` — Set to `"true"` to enable the worker heartbeat pinger
+  (or `"false"` to disable even if `HEARTBEAT_URL` is set).
+- `HEARTBEAT_URL` — Optional explicit target URL. When omitted and enabled, the
+  worker falls back to `${RENDER_EXTERNAL_URL}/ping` and then
+  `http://127.0.0.1:${PORT:-3000}/ping`.
+- `HEARTBEAT_INTERVAL_MS` — Interval in milliseconds between pings (default
+  `600000` / 10 minutes; clamped between `10000` and `840000`).
+
+## Health Endpoints and Restart Recovery
+
+The API exposes `GET /ping` plus separated subsystem health endpoints backed by
+the worker's persisted heartbeat file (`WORKER_HEALTH_PATH`, default
+`./data/worker-health.json`). Subsystems report `HEALTHY`, `DEGRADED`,
+`DISCONNECTED`, `SLEEPING`, or `RECOVERING` honestly without exposing tokens or
+secrets:
+
+- `GET /ping` — Lightweight keep-alive endpoint returning `{ "status": "ok",
+  "timestamp": <epochMs> }` with `Cache-Control: no-store` (exempt from `/api/*`
+  rate limits).
+- `GET /health` — Overall API readiness (`status: "ok"`), combined `workerState`,
+  staleness flag, hosting environment, and subsystem states.
+- `GET /health/market-data` — Binance market-data connectivity, consecutive
+  failures, skipped zero-duration no-trade candles, and last successful update.
+- `GET /health/signal-engine` — Scan timestamps, watchlist, last processed 5-minute
+  candle open time per symbol, active paper-trade count, and pending events.
+- `GET /health/telegram` — Telegram bot configuration, polling status, last poll
+  and delivery timestamps, pending notifications, and failed delivery count.
+
+If the worker restarts or wakes up from sleep, startup recovery automatically
+backfills missed closed 5-minute candles between each symbol's persisted ledger
+checkpoint and the latest closed 5-minute bar before resuming scheduled scans,
+and failed Telegram notifications are released back to `pending` for retry.

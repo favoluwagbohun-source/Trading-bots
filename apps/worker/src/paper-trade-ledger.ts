@@ -92,6 +92,7 @@ export interface PaperTradeEvent {
   readonly price?: number;
   readonly details: string;
   readonly deliveryStatus: PaperTradeDeliveryStatus;
+  readonly retryCount?: number;
 }
 
 export interface InvalidatePaperSetupInput {
@@ -229,7 +230,11 @@ function isPaperTradeEvent(value: unknown): value is PaperTradeEvent {
     typeof value.snapshotId === "string" &&
     (value.price === undefined || positive(value.price)) &&
     typeof value.details === "string" &&
-    ["pending", "claimed", "delivered"].includes(String(value.deliveryStatus));
+    ["pending", "claimed", "delivered"].includes(String(value.deliveryStatus)) &&
+    (value.retryCount === undefined ||
+      (typeof value.retryCount === "number" &&
+        Number.isInteger(value.retryCount) &&
+        value.retryCount >= 0));
 }
 
 function validateSymbol(symbol: string): string {
@@ -508,6 +513,10 @@ export class PaperTradeLedger {
       .map((event) => Object.freeze({ ...event }));
   }
 
+  getLastProcessedOpenTime(symbolInput: string): number | undefined {
+    return this.lastProcessedOpenTimeBySymbol.get(validateSymbol(symbolInput));
+  }
+
   claimEventDelivery(eventId: string): boolean {
     const event = this.events.get(eventId);
     if (!event) throw new Error(`Unknown paper-trade event: ${eventId}`);
@@ -515,6 +524,19 @@ export class PaperTradeLedger {
     return this.transaction(() => {
       this.events.set(eventId, { ...event, deliveryStatus: "claimed" });
       return true;
+    });
+  }
+
+  releaseEventClaim(eventId: string): void {
+    const event = this.events.get(eventId);
+    if (!event) throw new Error(`Unknown paper-trade event: ${eventId}`);
+    if (event.deliveryStatus !== "claimed") return;
+    this.transaction(() => {
+      this.events.set(eventId, {
+        ...event,
+        deliveryStatus: "pending",
+        retryCount: (event.retryCount ?? 0) + 1
+      });
     });
   }
 

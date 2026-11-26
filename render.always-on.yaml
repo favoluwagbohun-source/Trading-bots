@@ -1,0 +1,43 @@
+# Always-on Render Blueprint (does not sleep on inactivity and persists JSON state on disk).
+# Requires a paid Render Starter plan; Render Free web services automatically sleep after
+# 15 minutes without inbound traffic and use ephemeral storage.
+services:
+  - type: web
+    name: trading-bots-always-on
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: node apps/worker/dist/render-entrypoint.js
+    healthCheckPath: /health
+    disk:
+      name: crypto-signal-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: SERVE_WEB_ASSETS
+        value: "true"
+      - key: WATCHLIST_SYMBOLS
+        value: BTCUSDT,BTCUSDC
+      - key: SCAN_INTERVAL_MS
+        value: "60000"
+      - key: PAPER_TRADES_PATH
+        value: /app/data/paper-trades.json
+      - key: TELEGRAM_STATE_PATH
+        value: /app/data/telegram-state.json
+      - key: WORKER_HEALTH_PATH
+        value: /app/data/worker-health.json
+      - key: PAPER_FEE_RATE_PER_SIDE
+        value: "0.001"
+      - key: PAPER_SLIPPAGE_RATE_PER_SIDE
+        value: "0.0005"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEB_APP_URL
+        sync: false
+      - key: STRATEGY_QUALITY_EVIDENCE
+        sync: false

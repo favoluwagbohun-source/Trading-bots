@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   CandlestickSeries,
   HistogramSeries,
@@ -12,6 +12,8 @@ import {
   type UTCTimestamp
 } from "lightweight-charts";
 import type { Candle } from "@crypto-signal/shared";
+import type { ChartTradeOverlay } from "../chart-state.js";
+import type { FourHourTrendline, SwingLevel } from "../market-api.js";
 
 interface PriceLevel {
   readonly id: number;
@@ -44,6 +46,14 @@ interface Trendline {
 interface MarketChartProps {
   readonly candles: readonly Candle[];
   readonly marketKey: string;
+  readonly showTools?: boolean;
+  readonly onCloseTools?: () => void;
+  readonly dateControls?: ReactNode;
+  readonly autoTrendlines?: readonly FourHourTrendline[];
+  readonly swingLevels?: readonly SwingLevel[];
+  readonly showAutoOverlays?: boolean;
+  readonly activeTradeOverlay?: ChartTradeOverlay | null;
+  readonly onClearTradeOverlay?: () => void;
 }
 
 function price(value: string): number | undefined {
@@ -62,15 +72,28 @@ function candleTime(value: number): UTCTimestamp {
   return Math.floor(value / 1000) as UTCTimestamp;
 }
 
-export function MarketChart({ candles, marketKey }: MarketChartProps) {
+export function MarketChart({
+  candles,
+  marketKey,
+  showTools = false,
+  onCloseTools,
+  dateControls,
+  autoTrendlines = [],
+  swingLevels = [],
+  showAutoOverlays = false,
+  activeTradeOverlay = null,
+  onClearTradeOverlay
+}: MarketChartProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const lineRef = useRef<Array<ISeriesApi<"Line">>>([]);
+  const manualLineRef = useRef<Array<ISeriesApi<"Line">>>([]);
+  const autoLineRef = useRef<Array<ISeriesApi<"Line">>>([]);
   const priceLinesRef = useRef<Array<IPriceLine>>([]);
   const nextId = useRef(1);
   const fittedMarketKey = useRef("");
+  const fittedLengthRef = useRef(0);
   const drawingRef = useRef(false);
   const anchorRef = useRef<{ time: number; price: number } | null>(null);
   const [trendlines, setTrendlines] = useState<Trendline[]>([]);
@@ -96,11 +119,12 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
       layout: {
         background: { color: "#0b0e11" },
         textColor: "#848e9c",
+        fontFamily: "\"JetBrains Mono\", ui-monospace, monospace",
         attributionLogo: true
       },
       grid: {
-        vertLines: { color: "#171b20" },
-        horzLines: { color: "#171b20" }
+        vertLines: { color: "#151a21" },
+        horzLines: { color: "#151a21" }
       },
       crosshair: {
         mode: 0,
@@ -108,12 +132,12 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
         horzLine: { color: "#75808c", width: 1, style: LineStyle.Dashed }
       },
       rightPriceScale: {
-        borderColor: "#242a31",
-        scaleMargins: { top: 0.1, bottom: 0.24 }
+        borderColor: "#232a35",
+        scaleMargins: { top: 0.08, bottom: 0.22 }
       },
       leftPriceScale: { visible: false },
       timeScale: {
-        borderColor: "#242a31",
+        borderColor: "#232a35",
         timeVisible: true,
         secondsVisible: false
       },
@@ -134,7 +158,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
       lastValueVisible: true
     });
     const volumePane = chart.addPane();
-    volumePane.setHeight(92);
+    volumePane.setHeight(82);
     const volumeSeries = volumePane.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       lastValueVisible: false,
@@ -162,7 +186,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
       const anchor = anchorRef.current;
       if (!anchor) {
         anchorRef.current = selected;
-        setChartError("Click a second candle to finish the trendline.");
+        setChartError("Tap a second candle to finish the trendline.");
         return;
       }
       anchorRef.current = null;
@@ -197,7 +221,8 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
       chartRef.current = null;
       candlesRef.current = null;
       volumeRef.current = null;
-      lineRef.current = [];
+      manualLineRef.current = [];
+      autoLineRef.current = [];
       priceLinesRef.current = [];
     };
   }, []);
@@ -220,14 +245,17 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
         ? "rgba(14, 203, 129, 0.34)"
         : "rgba(246, 70, 93, 0.34)"
     })));
+    const previousLength = fittedLengthRef.current;
     if (
       candles.length > 0 &&
       (fittedMarketKey.current !== marketKey ||
+        (previousLength <= 5 && candles.length > 10) ||
         !chartRef.current?.timeScale().getVisibleLogicalRange())
     ) {
       chartRef.current?.timeScale().fitContent();
     }
     setLayoutVersion((version) => version + 1);
+    fittedLengthRef.current = candles.length;
     if (candles.length > 0) fittedMarketKey.current = marketKey;
   }, [candles, marketKey]);
 
@@ -235,11 +263,11 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
     const chart = chartRef.current;
     const series = candlesRef.current;
     if (!chart || !series) return;
-    for (const line of lineRef.current) chart.removeSeries(line);
-    lineRef.current = trendlines.map((trendline) => {
+    for (const line of manualLineRef.current) chart.removeSeries(line);
+    manualLineRef.current = trendlines.map((trendline) => {
       const line = chart.addSeries(LineSeries, {
-        color: "#9aa4b2",
-        lineWidth: 1,
+        color: "#cbd5e1",
+        lineWidth: 2,
         lineStyle: LineStyle.Solid,
         priceLineVisible: false,
         lastValueVisible: false,
@@ -248,7 +276,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
       const latestTime = candles.at(-1)?.openTime;
       const rayEndTime = latestTime === undefined
         ? trendline.endTime
-        : Math.max(trendline.endTime, latestTime / 1000);
+        : Math.max(trendline.endTime, Math.floor(latestTime / 1000));
       const projectedPrice = trendline.startPrice +
         (trendline.endPrice - trendline.startPrice) *
         ((rayEndTime - trendline.startTime) / (trendline.endTime - trendline.startTime));
@@ -265,6 +293,77 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
   }, [candles, trendlines]);
 
   useEffect(() => {
+    const chart = chartRef.current;
+    const series = candlesRef.current;
+    if (!chart || !series) return;
+    for (const line of autoLineRef.current) chart.removeSeries(line);
+    if (!showAutoOverlays || candles.length === 0) {
+      autoLineRef.current = [];
+      return;
+    }
+
+    const firstSec = Math.floor(candles[0]!.openTime / 1000);
+    const lastSec = Math.floor(candles.at(-1)!.openTime / 1000);
+    let candleLow = Infinity;
+    let candleHigh = -Infinity;
+    for (const c of candles) {
+      const low = Number(c.low);
+      const high = Number(c.high);
+      if (low < candleLow) candleLow = low;
+      if (high > candleHigh) candleHigh = high;
+    }
+    const created: Array<ISeriesApi<"Line">> = [];
+
+    for (const item of autoTrendlines.slice(0, 4)) {
+      const startSec = Math.floor(item.anchorA.openTime / 1000);
+      const endSec = Math.floor(item.anchorB.openTime / 1000);
+      if (endSec <= startSec) continue;
+      const clippedStart = Math.max(startSec, firstSec);
+      const clippedEnd = Math.max(endSec, lastSec);
+      if (clippedEnd <= clippedStart) continue;
+
+      const interpolate = (tSec: number) =>
+        item.anchorA.price +
+        ((item.anchorB.price - item.anchorA.price) * (tSec - startSec)) / (endSec - startSec);
+
+      const startVal = interpolate(clippedStart);
+      const endVal = interpolate(clippedEnd);
+      const lineMin = Math.min(startVal, endVal);
+      const lineMax = Math.max(startVal, endVal);
+      if (
+        Number.isFinite(candleLow) &&
+        Number.isFinite(candleHigh) &&
+        (lineMin > candleHigh * 1.15 || lineMax < candleLow * 0.85)
+      ) {
+        continue;
+      }
+
+      const points: { time: UTCTimestamp; value: number }[] = [
+        { time: clippedStart as UTCTimestamp, value: startVal }
+      ];
+      if (endSec > clippedStart && endSec < clippedEnd) {
+        points.push({ time: endSec as UTCTimestamp, value: item.anchorB.price });
+      }
+      points.push({ time: clippedEnd as UTCTimestamp, value: endVal });
+
+      const line = chart.addSeries(LineSeries, {
+        color: item.status === "valid"
+          ? (item.direction === "ascending" ? "#0ecb81" : "#f0b90b")
+          : "#596678",
+        lineWidth: item.status === "valid" ? 2 : 1,
+        lineStyle: item.status === "valid" ? LineStyle.Solid : LineStyle.Dashed,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null
+      });
+      line.setData(points);
+      created.push(line);
+    }
+    autoLineRef.current = created;
+  }, [autoTrendlines, candles, showAutoOverlays]);
+
+  useEffect(() => {
     const series = candlesRef.current;
     if (!series) return;
     for (const line of priceLinesRef.current) series.removePriceLine(line);
@@ -278,47 +377,75 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
         title: `Level ${displayPrice(level.price)}`
       })
     );
-    if (tradePlan) {
-      const risk = Math.abs(tradePlan.entry - tradePlan.stop);
-      const target1R = Math.abs(tradePlan.target1 - tradePlan.entry) / risk;
-      const target2R = Math.abs(tradePlan.target2 - tradePlan.entry) / risk;
+
+    if (showAutoOverlays && !activeTradeOverlay) {
+      for (const swing of swingLevels.slice(-4)) {
+        lines.push(
+          series.createPriceLine({
+            price: swing.price,
+            color: swing.direction === "high"
+              ? "rgba(246, 70, 93, 0.55)"
+              : "rgba(14, 203, 129, 0.55)",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: `${swing.timeframe.toUpperCase()} ${swing.direction === "high" ? "SH" : "SL"}`
+          })
+        );
+      }
+    }
+
+    const activePlan = activeTradeOverlay
+      ? {
+          side: activeTradeOverlay.side,
+          entry: activeTradeOverlay.entryPrice,
+          stop: activeTradeOverlay.stopPrice,
+          target1: activeTradeOverlay.target1,
+          target2: activeTradeOverlay.target2
+        }
+      : tradePlan;
+
+    if (activePlan) {
+      const risk = Math.abs(activePlan.entry - activePlan.stop);
+      const target1R = risk > 0 ? Math.abs(activePlan.target1 - activePlan.entry) / risk : 0;
+      const target2R = risk > 0 ? Math.abs(activePlan.target2 - activePlan.entry) / risk : 0;
       lines.push(
         series.createPriceLine({
-          price: tradePlan.entry,
-          color: "#f0a12b",
-          lineWidth: 1,
+          price: activePlan.entry,
+          color: "#f0b90b",
+          lineWidth: 2,
           lineStyle: LineStyle.Solid,
           axisLabelVisible: true,
-          title: `Entry ${displayPrice(tradePlan.entry)}`
+          title: `Entry ${displayPrice(activePlan.entry)}`
         }),
         series.createPriceLine({
-          price: tradePlan.stop,
+          price: activePlan.stop,
           color: "#F6465D",
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
-          title: `Stop ${displayPrice(tradePlan.stop)}`
+          title: `Stop ${displayPrice(activePlan.stop)}`
         }),
         series.createPriceLine({
-          price: tradePlan.target1,
+          price: activePlan.target1,
           color: "#3d9bff",
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
-          title: `TP1 ${displayPrice(tradePlan.target1)} · ${target1R.toFixed(2)}R`
+          title: `TP1 · ${target1R.toFixed(1)}R`
         }),
         series.createPriceLine({
-          price: tradePlan.target2,
-          color: "#3d9bff",
+          price: activePlan.target2,
+          color: "#0ecb81",
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
-          title: `TP2 ${displayPrice(tradePlan.target2)} · ${target2R.toFixed(2)}R`
+          title: `TP2 · ${target2R.toFixed(1)}R`
         })
       );
     }
     priceLinesRef.current = lines;
-  }, [levels, tradePlan]);
+  }, [activeTradeOverlay, levels, showAutoOverlays, swingLevels, tradePlan]);
 
   const zoneBoxes = zones.map((zone) => {
     const chart = chartRef.current;
@@ -352,7 +479,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
       return;
     }
     if (levels.length >= 3) {
-      setChartError("The chart supports at most three horizontal levels.");
+      setChartError("The chart supports at most three manual horizontal levels.");
       return;
     }
     setLevels((items) => [...items, { id: nextId.current++, price: value }]);
@@ -365,7 +492,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
     const low = price(zoneLowInput);
     const high = price(zoneHighInput);
     if (low === undefined || high === undefined || low >= high) {
-      setChartError("Enter a valid zone with a positive low price below its high price.");
+      setChartError("Enter a valid zone with a low price below its high price.");
       return;
     }
     if (zones.length >= 2) {
@@ -404,18 +531,26 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
 
   function toggleTrendlineDrawing(): void {
     if (trendlines.length >= 4 && !drawingLine) {
-      setChartError("The chart supports at most four trendlines.");
+      setChartError("The chart supports at most four manual trendlines.");
       return;
     }
     const next = !drawingLine;
     drawingRef.current = next;
     anchorRef.current = null;
     setDrawingLine(next);
-    setChartError(next ? "Click two candles to draw a trendline ray." : null);
+    setChartError(next ? "Tap two candles on the chart to draw a trendline ray." : null);
   }
 
-  return (
-    <section className="chart-card" aria-label="Market chart">
+  const toolsPanel = (
+    <div className="chart-tools-panel">
+      <div className="tools-sheet-header">
+        <span>Drawing Tools &amp; Date Range</span>
+        {onCloseTools && (
+          <button type="button" className="quiet-button" onClick={onCloseTools}>
+            Done
+          </button>
+        )}
+      </div>
       <div className="chart-toolbar">
         <div className="chart-tools">
           <button
@@ -444,7 +579,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
               onClick={() => setLevels((items) => items.filter((item) => item.id !== level.id))}
               title="Remove horizontal level"
             >
-              <span className="level-dot" />{displayPrice(level.price)} ×
+              Level {displayPrice(level.price)} ×
             </button>
           ))}
           {trendlines.map((line) => (
@@ -455,7 +590,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
               onClick={() => setTrendlines((items) => items.filter((item) => item.id !== line.id))}
               title="Remove trendline"
             >
-              <span className="trend-dot" />Trendline ×
+              Trendline ×
             </button>
           ))}
         </div>
@@ -474,14 +609,14 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
             <input
               aria-label="Zone low price"
               inputMode="decimal"
-              placeholder="Zone low"
+              placeholder="Low"
               value={zoneLowInput}
               onChange={(event) => setZoneLowInput(event.target.value)}
             />
             <input
               aria-label="Zone high price"
               inputMode="decimal"
-              placeholder="Zone high"
+              placeholder="High"
               value={zoneHighInput}
               onChange={(event) => setZoneHighInput(event.target.value)}
             />
@@ -495,7 +630,7 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
               onClick={() => setZones((items) => items.filter((item) => item.id !== zone.id))}
               title="Remove supply/demand zone"
             >
-              <span className="zone-dot" />{zone.direction} {displayPrice(zone.low)}–{displayPrice(zone.high)} ×
+              {zone.direction} {displayPrice(zone.low)}–{displayPrice(zone.high)} ×
             </button>
           ))}
         </div>
@@ -512,7 +647,13 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
         </label>
         {(["entry", "stop", "target1", "target2"] as const).map((field) => (
           <label key={field}>
-            {field === "target1" ? "TP1" : field === "target2" ? "TP2" : field}
+            {field === "entry"
+              ? "Entry"
+              : field === "stop"
+                ? "Stop"
+                : field === "target1"
+                  ? "TP1"
+                  : "TP2"}
             <input
               inputMode="decimal"
               placeholder="Price"
@@ -524,21 +665,49 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
             />
           </label>
         ))}
-        <button type="submit">Show trade levels</button>
+        <button type="submit">Plot trade levels</button>
         {tradePlan && (
-          <>
-            <span className="runner-note">TP3 · trailing runner</span>
-            <button
-              type="button"
-              className="quiet-button"
-              onClick={() => setTradePlan(null)}
-            >
-              Clear trade
-            </button>
-          </>
+          <button
+            type="button"
+            className="quiet-button"
+            onClick={() => setTradePlan(null)}
+          >
+            Clear trade
+          </button>
         )}
       </form>
+      {dateControls}
+    </div>
+  );
+
+  return (
+    <section className="chart-card" aria-label="Market chart">
+      {showTools && (
+        <>
+          <div className="tools-backdrop" onClick={onCloseTools} aria-hidden="true" />
+          <div className="chart-tools-drawer">
+            <div className="sheet-grab-handle" aria-hidden="true" />
+            {toolsPanel}
+          </div>
+        </>
+      )}
+
+      {activeTradeOverlay && (
+        <div className="plotted-overlay-strip">
+          <span>
+            {activeTradeOverlay.label} · {activeTradeOverlay.side === "long" ? "Long" : "Short"} · Entry{" "}
+            {displayPrice(activeTradeOverlay.entryPrice)} · Stop {displayPrice(activeTradeOverlay.stopPrice)}
+          </span>
+          {onClearTradeOverlay && (
+            <button type="button" className="quiet-button" onClick={onClearTradeOverlay}>
+              Clear overlay
+            </button>
+          )}
+        </div>
+      )}
+
       {chartError && <p className="chart-message" role="status">{chartError}</p>}
+
       <div className="chart-viewport">
         <div ref={hostRef} className="chart-host" />
         <div className="chart-zone-layer" aria-hidden="true" key={layoutVersion}>
@@ -546,9 +715,8 @@ export function MarketChart({ candles, marketKey }: MarketChartProps) {
         </div>
         {candles.length === 0 && (
           <div className="chart-empty">
-            <span className="empty-mark">◌</span>
-            <strong>Waiting for market data</strong>
-            <span>Connect the market API to load Binance candles.</span>
+            <strong>Loading Binance candles</strong>
+            <span>Connecting to live market data stream…</span>
           </div>
         )}
       </div>

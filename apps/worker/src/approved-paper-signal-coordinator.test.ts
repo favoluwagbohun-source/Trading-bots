@@ -172,4 +172,27 @@ describe("ApprovedPaperSignalCoordinator", () => {
     expect(optedOut.ledger.getTrades()).toEqual([]);
     expect(optedOut.sendPhoto).not.toHaveBeenCalled();
   });
+
+  it("releases ledger event claim and reports delivery error when Telegram send fails", async () => {
+    const onDeliveryError = vi.fn();
+    const { options, users, ledger } = coordinatorOptions({
+      api: {
+        sendPhoto: vi.fn(async () => {
+          throw new Error("Telegram temporary outage");
+        })
+      },
+      onDeliveryError
+    });
+    users.setAccountEquity(42, 1000);
+    users.setPaperTradingEnabled(42, true);
+    const coordinator = new ApprovedPaperSignalCoordinator(options);
+
+    await expect(coordinator.processCandidate(candidate())).resolves.toBeUndefined();
+
+    expect(onDeliveryError).toHaveBeenCalledOnce();
+    expect(ledger.getEvents({ chatId: 42 })[0]).toMatchObject({
+      deliveryStatus: "pending",
+      retryCount: 1
+    });
+  });
 });

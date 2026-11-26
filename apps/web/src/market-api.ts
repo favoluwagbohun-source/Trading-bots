@@ -1,4 +1,11 @@
-import type { Candle } from "@crypto-signal/shared";
+import type {
+  Candle,
+  HealthState,
+  MarketDataHealthSnapshot,
+  SignalEngineHealthSnapshot,
+  StrategyId,
+  TelegramHealthSnapshot
+} from "@crypto-signal/shared";
 import type { MarketTimeframe, StreamStatus } from "@crypto-signal/market-data";
 
 export interface HistoricalQuery {
@@ -13,6 +20,116 @@ export type MarketStreamMessage =
   | { readonly type: "candle"; readonly candle: Candle }
   | { readonly type: "status"; readonly status: StreamStatus }
   | { readonly type: "error"; readonly message: string };
+
+export interface TimeframeSummary {
+  readonly timeframe: MarketTimeframe;
+  readonly availableAt: number | null;
+  readonly regime: "bullish" | "bearish" | "neutral";
+  readonly volatilityRegime: "low" | "normal" | "high";
+  readonly trendStrength: number;
+  readonly latestHigh: number | null;
+  readonly latestLow: number | null;
+  readonly candleCount: number;
+}
+
+export interface FourHourTrendline {
+  readonly id: string;
+  readonly direction: "ascending" | "descending";
+  readonly status: "valid" | "broken";
+  readonly breakStatus: "unbroken" | "broken_above" | "broken_below";
+  readonly qualifyingTouchCount: number;
+  readonly anchorA: { readonly openTime: number; readonly price: number };
+  readonly anchorB: { readonly openTime: number; readonly price: number };
+  readonly projectedPrice: number;
+}
+
+export interface SwingLevel {
+  readonly id: string;
+  readonly timeframe: "4h" | "1h";
+  readonly direction: "high" | "low";
+  readonly price: number;
+  readonly openTime: number;
+}
+
+export interface StrategyEvaluationSummary {
+  readonly strategy: StrategyId;
+  readonly variation?: "break" | "bounce" | "retest";
+  readonly status: "setup_confirmed" | "rejected";
+  readonly direction: "buy" | "sell" | null;
+  readonly relevantTimeframe: MarketTimeframe;
+  readonly evidence: readonly string[];
+  readonly entryCondition: string;
+  readonly invalidationCondition: string;
+  readonly stopMethodology: string;
+  readonly targetMethodology: string;
+  readonly reason: string;
+  readonly signalId: string | null;
+}
+
+export interface SignalCandidateSummary {
+  readonly signalId: string;
+  readonly strategy: StrategyId;
+  readonly mode?: "break" | "bounce" | "retest";
+  readonly side: "buy" | "sell";
+  readonly entryPrice: number;
+  readonly stopLoss: number;
+  readonly target1: number;
+  readonly target2: number;
+  readonly target3: "trailing_runner";
+  readonly minimumRiskReward: number;
+  readonly higherTimeframeBias: string;
+  readonly entryCandleOpenTime: number;
+}
+
+export interface MarketAnalysisData {
+  readonly symbol: string;
+  readonly snapshotId: string;
+  readonly analysisTime: number;
+  readonly latestPrice: number;
+  readonly signalCandle: Candle;
+  readonly timeframes: readonly TimeframeSummary[];
+  readonly fourHourTrendlines: readonly FourHourTrendline[];
+  readonly swingLevels: readonly SwingLevel[];
+  readonly evaluations: readonly StrategyEvaluationSummary[];
+  readonly candidates: readonly SignalCandidateSummary[];
+  readonly warnings: readonly string[];
+}
+
+export interface OverallHealthSummary {
+  readonly status: "ok";
+  readonly api: "HEALTHY";
+  readonly state: HealthState;
+  readonly workerState: HealthState;
+  readonly stale: boolean;
+  readonly hostingEnvironment: string;
+  readonly workerUpdatedAt: number | null;
+  readonly uptimeSeconds: number;
+  readonly timestamp: number;
+  readonly subsystems: {
+    readonly marketData: HealthState;
+    readonly signalEngine: HealthState;
+    readonly telegram: HealthState;
+  };
+}
+
+export interface PlatformHealthBundle {
+  readonly overall: OverallHealthSummary;
+  readonly marketData: MarketDataHealthSnapshot & {
+    readonly stale: boolean;
+    readonly updatedAt: number | null;
+    readonly hostingEnvironment: string;
+  };
+  readonly signalEngine: SignalEngineHealthSnapshot & {
+    readonly stale: boolean;
+    readonly updatedAt: number | null;
+    readonly hostingEnvironment: string;
+  };
+  readonly telegram: TelegramHealthSnapshot & {
+    readonly stale: boolean;
+    readonly updatedAt: number | null;
+    readonly hostingEnvironment: string;
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -75,6 +192,61 @@ export async function fetchHistoricalCandles(
     throw new Error("Market API returned an invalid historical response");
   }
   return body.candles.map(parseCandle);
+}
+
+export async function fetchMarketAnalysis(
+  symbol: string,
+  signal?: AbortSignal
+): Promise<MarketAnalysisData> {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+  const init: RequestInit = signal === undefined ? {} : { signal };
+  const params = new URLSearchParams({ symbol });
+  const response = await fetch(`${baseUrl}/api/market/analysis?${params.toString()}`, init);
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => undefined);
+    const message = isRecord(body) && typeof body.error === "string"
+      ? body.error
+      : `Market analysis API returned HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  const body: unknown = await response.json();
+  if (
+    !isRecord(body) ||
+    typeof body.symbol !== "string" ||
+    !Array.isArray(body.timeframes) ||
+    !Array.isArray(body.evaluations)
+  ) {
+    throw new Error("Market analysis API returned an invalid response");
+  }
+  return body as unknown as MarketAnalysisData;
+}
+
+export async function fetchPlatformHealth(
+  signal?: AbortSignal
+): Promise<PlatformHealthBundle> {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+  const init: RequestInit = signal === undefined ? {} : { signal };
+  const [overallRes, marketRes, engineRes, telegramRes] = await Promise.all([
+    fetch(`${baseUrl}/health`, init),
+    fetch(`${baseUrl}/health/market-data`, init),
+    fetch(`${baseUrl}/health/signal-engine`, init),
+    fetch(`${baseUrl}/health/telegram`, init)
+  ]);
+  if (!overallRes.ok || !marketRes.ok || !engineRes.ok || !telegramRes.ok) {
+    throw new Error("Health endpoint returned an unexpected status");
+  }
+  const [overall, marketData, signalEngine, telegram] = await Promise.all([
+    overallRes.json(),
+    marketRes.json(),
+    engineRes.json(),
+    telegramRes.json()
+  ]);
+  return {
+    overall: overall as OverallHealthSummary,
+    marketData: marketData as PlatformHealthBundle["marketData"],
+    signalEngine: signalEngine as PlatformHealthBundle["signalEngine"],
+    telegram: telegram as PlatformHealthBundle["telegram"]
+  };
 }
 
 export function marketStreamUrl(

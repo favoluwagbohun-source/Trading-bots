@@ -117,3 +117,27 @@ manifest. Binance's public API returns occasional zero-duration, zero-volume
 rows for empty intervals; those rows are explicitly warned about, excluded
 rather than synthesized, and counted in the manifest. Requested periods
 before a symbol's listing naturally have no candles.
+
+## Hosting reliability, subsystem health, and restart recovery
+
+- Render Free (`render.yaml`) sets `HEARTBEAT_ENABLED=true` and uses the
+  worker's interval-based `HeartbeatPinger` (`HEARTBEAT_INTERVAL_MS`, default
+  `600000` ms) to send periodic HTTP `GET` requests to `HEARTBEAT_URL`,
+  `${RENDER_EXTERNAL_URL}/ping`, or the local `GET /ping` endpoint (which
+  returns `{ status: "ok", timestamp }` with `Cache-Control: no-store` and is
+  exempt from `/api/*` rate limits) to help keep free-tier Render instances
+  awake. Render Free still uses ephemeral storage, so JSON state can be lost
+  across restarts or redeploys.
+- `render.always-on.yaml` provides an always-on Render Blueprint (`plan: starter`
+  with a persistent disk mounted at `/app/data`) so the API, scanner worker,
+  and Telegram bot do not sleep and retain `paper-trades.json`,
+  `telegram-state.json`, and `worker-health.json` across restarts.
+- `WorkerHealthStore` persists atomic subsystem snapshots and `apps/api` exposes
+  `GET /ping`, `GET /health`, `GET /health/market-data`,
+  `GET /health/signal-engine`, and `GET /health/telegram` with honest
+  `HEALTHY`, `DEGRADED`, `DISCONNECTED`, `SLEEPING`, and `RECOVERING` states
+  (marking stale heartbeats as `SLEEPING` and redacting secrets).
+- On worker startup or wake-up, `recoverMissingCandles` backfills closed
+  5-minute candles from each symbol's persisted checkpoint before resuming
+  scheduled scanning, and `ApprovedPaperSignalCoordinator` releases failed
+  event claims (`releaseEventClaim`) so transient delivery errors recover cleanly.

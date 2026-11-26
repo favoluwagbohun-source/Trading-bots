@@ -22,7 +22,13 @@ services:
         value: /app/data/paper-trades.json
       - key: TELEGRAM_STATE_PATH
         value: /app/data/telegram-state.json
+      - key: WORKER_HEALTH_PATH
+        value: /app/data/worker-health.json
       - key: PAPER_FEE_RATE_PER_SIDE
         value: "0.001"
       - key: PAPER_SLIPPAGE_RATE_PER_SIDE
         value: "0.0005"
+      - key: HEARTBEAT_ENABLED
+        value: "true"
+      - key: HEARTBEAT_INTERVAL_MS
+        value: "600000"

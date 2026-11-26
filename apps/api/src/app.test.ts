@@ -143,7 +143,9 @@ describe("market API", () => {
     const closed = once(socket, "close");
     socket.close();
     await closed;
-    expect(stop).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(stop).toHaveBeenCalledOnce();
+    });
   });
 
   it("closes invalid WebSocket stream requests with a clear error", async () => {
@@ -161,5 +163,43 @@ describe("market API", () => {
       message: expect.stringContaining("Unsupported timeframe")
     });
     await closed;
+  });
+
+  it("computes deterministic multi-timeframe analysis on /api/market/analysis", async () => {
+    const getHistoricalKlines = vi.fn(async ({ timeframe }: { timeframe: string }) => {
+      const step = timeframe === "5m" ? 300_000 : 3_600_000;
+      return Array.from({ length: 12 }, (_, index) => ({
+        openTime: 1_700_000_000_000 + index * step,
+        closeTime: 1_700_000_000_000 + (index + 1) * step - 1,
+        open: String(100 + index),
+        high: String(102 + index),
+        low: String(99 + index),
+        close: String(101 + index),
+        volume: "25",
+        closed: true
+      }));
+    });
+    const server = await createApiServer({
+      restClient: { getHistoricalKlines }
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/market/analysis?symbol=btcusdt"
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.symbol).toBe("BTCUSDT");
+    expect(body.timeframes).toHaveLength(6);
+    expect(body.evaluations).toHaveLength(6);
+    expect(body.warnings).toEqual([]);
+
+    const bad = await server.inject({
+      method: "GET",
+      url: "/api/market/analysis?symbol=bad"
+    });
+    expect(bad.statusCode).toBe(400);
   });
 });
