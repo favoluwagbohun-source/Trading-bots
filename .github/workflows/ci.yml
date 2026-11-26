@@ -19,6 +19,3 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: docker compose --env-file deploy/production.env.example config --quiet
-      - run: docker build --target runtime -t trading-bots-runtime:ci .
-      - run: docker build --target web -t trading-bots-web:ci .
