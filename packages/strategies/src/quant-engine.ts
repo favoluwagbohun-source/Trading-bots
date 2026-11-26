@@ -57,7 +57,8 @@ export function evaluateQuantitativeConsistency(input: {
   const results: QuantSignalResult[] = [];
 
   // Scan recent closed candles for high-expectancy quant setups
-  for (let i = candles.length - 5; i < candles.length; i++) {
+  const startIndex = Math.max(14, candles.length - 10);
+  for (let i = startIndex; i < candles.length; i++) {
     const candle = candles[i];
     if (!candle || !candle.closed) continue;
 
@@ -71,14 +72,28 @@ export function evaluateQuantitativeConsistency(input: {
 
     if (range <= 0 || atr <= 0) continue;
 
-    const isBullishEngulfing = close > open && body > atr * 1.1 && close > Number(candles[i - 1]?.close ?? open);
-    const isBearishEngulfing = close < open && body > atr * 1.1 && close < Number(candles[i - 1]?.close ?? open);
+    const prevClose = Number(candles[i - 1]?.close ?? open);
+    const isBullishMomentum = close > open && body > atr * 0.85 && body / range >= 0.52 && close > prevClose;
+    const isBearishMomentum = close < open && body > atr * 0.85 && body / range >= 0.52 && close < prevClose;
 
-    if (!isBullishEngulfing && !isBearishEngulfing) continue;
+    if (!isBullishMomentum && !isBearishMomentum) continue;
 
-    const side = isBullishEngulfing ? "buy" : "sell";
-    if (higherTimeframeBias === "bullish" && side === "sell") continue;
-    if (higherTimeframeBias === "bearish" && side === "buy") continue;
+    const side = isBullishMomentum ? "buy" : "sell";
+    const volume = Number(candle.volume);
+    const lookback = candles.slice(Math.max(0, i - 10), i);
+    const avgVol = lookback.length > 0
+      ? lookback.reduce((acc, c) => acc + Number(c.volume), 0) / lookback.length
+      : volume;
+    const volRatio = avgVol > 0 ? volume / avgVol : 1;
+
+    const biasAligned =
+      (higherTimeframeBias === "bullish" && side === "buy") ||
+      (higherTimeframeBias === "bearish" && side === "sell");
+    const biasOpposed =
+      (higherTimeframeBias === "bullish" && side === "sell") ||
+      (higherTimeframeBias === "bearish" && side === "buy");
+
+    if (biasOpposed && volRatio < 1.1 && body <= atr * 1.1) continue;
 
     const entryPrice = close;
     const stopBuffer = atr * 0.5;
@@ -90,15 +105,12 @@ export function evaluateQuantitativeConsistency(input: {
     const target2 = side === "buy" ? entryPrice + risk * 2.5 : entryPrice - risk * 2.5;
     const riskRewardRatio = 2.0;
 
-    // Consistency scoring based on volatility efficiency & volume conformity
-    const volume = Number(candle.volume);
-    const avgVol = candles.slice(Math.max(0, i - 10), i).reduce((acc, c) => acc + Number(c.volume), 0) / Math.min(10, i);
-    const volRatio = avgVol > 0 ? volume / avgVol : 1;
-
     let consistencyScore = 72;
-    if (volRatio > 1.3) consistencyScore += 12;
-    if (higherTimeframeBias !== "neutral") consistencyScore += 10;
-    consistencyScore = Math.min(98, consistencyScore);
+    if (volRatio > 1.2) consistencyScore += 10;
+    if (body > atr * 1.1) consistencyScore += 6;
+    if (biasAligned) consistencyScore += 10;
+    else if (biasOpposed) consistencyScore -= 6;
+    consistencyScore = Math.max(55, Math.min(98, consistencyScore));
 
     const expectancyScore = Number((riskRewardRatio * (consistencyScore / 100) - (1 - consistencyScore / 100)).toFixed(2));
 
@@ -107,7 +119,7 @@ export function evaluateQuantitativeConsistency(input: {
       timestamp: candle.closeTime,
       symbol: symbol.toUpperCase(),
       timeframe,
-      strategy: isBullishEngulfing ? "break_and_retest" : "liquidity_sweep_reversal",
+      strategy: isBullishMomentum ? "break_and_retest" : "liquidity_sweep_reversal",
       side,
       entryPrice,
       stopLoss,

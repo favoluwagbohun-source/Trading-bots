@@ -42,9 +42,9 @@ const GRADE_MAX: Readonly<Record<SignalGrade, number>> = {
 };
 
 function gradeForScore(score: number): SignalGrade {
-  if (score >= 90) return "A";
-  if (score >= 80) return "B";
-  if (score >= 65) return "C";
+  if (score >= 85) return "A";
+  if (score >= 70) return "B";
+  if (score >= 55) return "C";
   return "D";
 }
 
@@ -207,9 +207,9 @@ export function scoreSignalQuality(
     ? 7
     : alignedRegime
       ? 10
-      : candidate.strategy === "liquidity_sweep_reversal"
-        ? 7
-        : 3;
+      : candidate.strategy === "top_down_trendline"
+        ? 3
+        : 6;
   factors.push(factor(
     "market_regime",
     regimePoints,
