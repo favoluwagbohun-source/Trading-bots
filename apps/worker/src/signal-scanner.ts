@@ -69,6 +69,7 @@ export interface SignalScannerOptions {
   readonly scanIntervalMs: number;
   readonly onCandidate: (candidate: SignalCandidate) => void | Promise<void>;
   readonly onError: (symbol: string, error: unknown) => void;
+  readonly onCandles?: (symbol: string, candles: readonly Candle[]) => void | Promise<void>;
   readonly historyLimit?: number;
 }
 
@@ -316,6 +317,9 @@ export class SignalScanner {
           }
         }
         if (!datasets.has("5m")) continue;
+        if (this.options.onCandles) {
+          await this.options.onCandles(symbol, datasets.get("5m")!);
+        }
         const candidates = createCandidates(symbol, datasets);
         for (const candidate of candidates) {
           if (this.emittedCandidates.has(candidate.signalId)) continue;

@@ -38,18 +38,25 @@ describe("SignalScanner", () => {
     });
     const onCandidate = vi.fn();
     const onError = vi.fn();
+    const onCandles = vi.fn();
     const scanner = new SignalScanner({
       symbols: ["btcusdt", "BTCUSDT"],
       client: { getHistoricalKlines },
       scanIntervalMs: 30_000,
       onCandidate,
-      onError
+      onError,
+      onCandles
     });
 
     await expect(scanner.scanOnce()).resolves.toEqual([]);
     expect(requested).toEqual(TIMEFRAMES);
     expect(onCandidate).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
+    expect(onCandles).toHaveBeenCalledWith("BTCUSDT", [
+      candle(0, { open: 100, high: 101, low: 99, close: 100 }),
+      candle(1, { open: 100, high: 101, low: 99, close: 100 }),
+      candle(2, { open: 100, high: 101, low: 99, close: 100 }, false)
+    ]);
   });
 
   it("emits independently evaluated candidates once and keeps future entry candles out of the chart snapshot", async () => {

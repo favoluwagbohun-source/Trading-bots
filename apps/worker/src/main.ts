@@ -1,4 +1,5 @@
 import { BinanceRestClient } from "@crypto-signal/market-data";
+import { PaperTradeLedger } from "./paper-trade-ledger.js";
 import { scoreSignalQuality } from "./signal-quality.js";
 import { SignalScanner } from "./signal-scanner.js";
 
@@ -17,6 +18,9 @@ function parseScanInterval(value: string | undefined): number {
 }
 
 const controller = new AbortController();
+const tradeLedger = new PaperTradeLedger({
+  filePath: process.env.PAPER_TRADES_PATH?.trim() || "./data/paper-trades.json"
+});
 const scanner = new SignalScanner({
   symbols: parseWatchlist(process.env.WATCHLIST_SYMBOLS),
   client: new BinanceRestClient(),
@@ -26,6 +30,14 @@ const scanner = new SignalScanner({
     console.info(
       `Candidate detected: ${candidate.symbol} ${candidate.strategy} ${candidate.side} at ${candidate.signalCandle.closeTime}; setup score ${quality.score}/100, grade ${quality.strategyGrade}; Telegram eligible: ${quality.publishEligible}.`
     );
+  },
+  onCandles: (symbol, candles) => {
+    const events = tradeLedger.processClosedCandles(symbol, candles);
+    for (const event of events) {
+      console.info(
+        `Paper-trade event pending: ${event.symbol} ${event.type} for signal ${event.signalId}.`
+      );
+    }
   },
   onError: (symbol, error) => {
     const message = error instanceof Error ? error.message : String(error);

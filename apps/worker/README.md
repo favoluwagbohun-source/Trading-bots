@@ -18,6 +18,12 @@ fee/slippage-adjusted position sizing, the fixed 1% account-risk budget, and
 configured portfolio limits. Call `confirmPublished` only after a paper signal
 has actually been delivered. This preflight is not yet wired into Telegram.
 
+The worker's `PaperTradeLedger` persists active paper trades and lifecycle events
+in `data/paper-trades.json` (override with `PAPER_TRADES_PATH`). It replays newly
+closed 5-minute candles after restarts, emits deterministic TP/stop/runner events,
+and rejects candle gaps rather than silently skipping them. Event delivery claims
+are persisted before sending; ambiguous deliveries are not automatically retried.
+
 `scoreSignalQuality` explains its score across higher-timeframe alignment (20),
 trendline validity (15), entry confirmation (15), structural confluence (10),
 volume (10), candle quality (10), market regime (10), and geometric TP2 R:R
@@ -28,6 +34,5 @@ Without cited strategy-validation evidence, the grade is capped at C and cannot
 pass the Telegram publication gate.
 
 Publication remains gated until the scanner, risk gate, quality grading,
-durable paper-trade tracking, and matching chart image are connected end to end.
-Scanner de-duplication, portfolio state, and Telegram user settings are currently
-in memory and do not survive a restart.
+paper-trade ledger, and matching chart image are connected to Telegram end to
+end. Portfolio risk state and scanner candidate de-duplication remain in memory.
