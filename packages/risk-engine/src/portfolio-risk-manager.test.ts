@@ -112,6 +112,18 @@ describe("portfolio risk manager", () => {
     .toThrow("gross exposure");
   });
 
+  it("supports preflight checks without reserving or consuming a signal", () => {
+    const manager = new PortfolioRiskManager(1000, limits);
+    const proposed = trade("signal-1", "BTCUSDT");
+
+    expect(() => manager.assertCanOpenTrade(proposed)).not.toThrow();
+    expect(manager.getSnapshot(proposed.openedAt).openTrades).toEqual([]);
+    expect(() => manager.assertCanOpenTrade(proposed)).not.toThrow();
+
+    manager.openTrade(proposed);
+    expect(() => manager.assertCanOpenTrade(proposed)).toThrow("Duplicate signal");
+  });
+
   it("validates limits at construction", () => {
     expect(() => new PortfolioRiskManager(1000, {
       ...limits,

@@ -78,6 +78,13 @@ export class PortfolioRiskManager {
   }
 
   openTrade(trade: OpenPaperTrade): void {
+    this.assertCanOpenTrade(trade);
+    const normalized = { ...trade, symbol: trade.symbol.trim().toUpperCase() };
+    this.openTrades.set(trade.signalId, normalized);
+    this.processedSignalIds.add(trade.signalId);
+  }
+
+  assertCanOpenTrade(trade: OpenPaperTrade): void {
     this.validateTrade(trade);
     const symbol = trade.symbol.trim().toUpperCase();
     if (this.processedSignalIds.has(trade.signalId)) {
@@ -114,10 +121,6 @@ export class PortfolioRiskManager {
     ) {
       throw new PortfolioRiskError("Maximum weekly loss limit would be exceeded");
     }
-
-    const normalized = { ...trade, symbol };
-    this.openTrades.set(trade.signalId, normalized);
-    this.processedSignalIds.add(trade.signalId);
   }
 
   closeTrade(signalId: string, realizedPnl: number, closedAt: number): void {

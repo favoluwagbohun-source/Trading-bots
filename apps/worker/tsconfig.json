@@ -10,6 +10,7 @@
   "references": [
     { "path": "../../packages/indicators" },
     { "path": "../../packages/market-data" },
+    { "path": "../../packages/risk-engine" },
     { "path": "../../packages/shared" },
     { "path": "../../packages/strategies" }
   ]
