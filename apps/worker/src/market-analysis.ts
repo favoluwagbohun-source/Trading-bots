@@ -1,11 +1,14 @@
 import {
   atr,
+  buildTrendlineLifecycles,
   classifyMarketStructure,
-  detectTrendlines,
+  classifyMarketRegime,
   findConfirmedSwings,
   type MarketStructure,
+  type MarketRegimeResult,
   type SwingPoint,
-  type Trendline
+  type Trendline,
+  type TrendlineLifecycle
 } from "@crypto-signal/indicators";
 import {
   normalizeSymbol,
@@ -15,7 +18,7 @@ import type { Candle, StrategyId } from "@crypto-signal/shared";
 import {
   activateAtNextOpen,
   activateSetupAtNextOpen,
-  evaluateBreakAndRetest,
+  evaluateBreakAndRetestState,
   evaluateLiquiditySweep,
   evaluateOrderBlockRetest,
   evaluateTopDownTrendline,
@@ -45,6 +48,8 @@ const TIMEFRAME_MAP: Readonly<Record<TopDownTimeframe, AnalysisTimeframe>> = {
 const TOP_DOWN_MODES: readonly EntryMode[] = ["break", "bounce", "retest"];
 
 export interface ChartAnnotations {
+  readonly actionLine?: AnalysisLine;
+  readonly safetyLine?: AnalysisLine;
   readonly trendline?: {
     readonly id: string;
     readonly qualifyingTouchCount: number;
@@ -59,6 +64,33 @@ export interface ChartAnnotations {
   }[];
 }
 
+export interface AnalysisLine {
+  readonly id: string;
+  readonly timeframe: MarketTimeframe;
+  readonly direction: "ascending" | "descending";
+  readonly anchorA: { readonly openTime: number; readonly price: number };
+  readonly anchorB: { readonly openTime: number; readonly price: number };
+  readonly projectedPrice: number;
+  readonly status: "valid" | "broken";
+  readonly breakStatus: "unbroken" | "broken_above" | "broken_below";
+  readonly source: "engineering_assumption";
+}
+
+export interface StrategyEvaluation {
+  readonly strategy: StrategyId;
+  readonly variation?: EntryMode;
+  readonly status: "setup_confirmed" | "rejected";
+  readonly direction: "buy" | "sell" | null;
+  readonly relevantTimeframe: MarketTimeframe;
+  readonly evidence: readonly string[];
+  readonly entryCondition: string;
+  readonly invalidationCondition: string;
+  readonly stopMethodology: string;
+  readonly targetMethodology: string;
+  readonly reason: string;
+  readonly signalId: string | null;
+}
+
 export interface TimeframeAnalysis {
   readonly timeframe: MarketTimeframe;
   readonly candles: readonly Candle[];
@@ -66,6 +98,8 @@ export interface TimeframeAnalysis {
   readonly swings: readonly SwingPoint[];
   readonly marketStructure: MarketStructure;
   readonly trendlines: readonly Trendline[];
+  readonly trendlineLifecycles: readonly TrendlineLifecycle[];
+  readonly marketRegime: MarketRegimeResult;
 }
 
 export interface MarketAnalysisSnapshot {
@@ -80,6 +114,7 @@ export interface MarketAnalysisSnapshot {
 export interface SignalChart {
   readonly snapshotId: string;
   readonly symbol: string;
+  readonly analysisSnapshot?: MarketAnalysisSnapshot;
   readonly strategy: StrategyId;
   readonly side: "buy" | "sell";
   readonly signalCandle: Candle;
@@ -104,6 +139,7 @@ export interface SignalCandidate extends SignalChart {
 export interface MarketAnalysisResult {
   readonly snapshot: MarketAnalysisSnapshot;
   readonly candidates: readonly SignalCandidate[];
+  readonly evaluations: readonly StrategyEvaluation[];
 }
 
 function assertCandle(candle: Candle, timeframe: MarketTimeframe, previous?: Candle): void {
@@ -149,6 +185,55 @@ function immutableTrendline(trendline: Trendline): Trendline {
   });
 }
 
+function trendlineFromLifecycle(
+  lifecycle: TrendlineLifecycle,
+  candles: readonly Candle[]
+): Trendline {
+  const confirmedAtIndex = candles.findIndex((candle) =>
+    candle.closeTime === lifecycle.createdAt
+  );
+  const brokenAtIndex = lifecycle.brokenAt === null
+    ? undefined
+    : candles.findIndex((candle) => candle.closeTime === lifecycle.brokenAt);
+  if (
+    confirmedAtIndex < 0 ||
+    (lifecycle.brokenAt !== null &&
+      (brokenAtIndex === undefined || brokenAtIndex < 0))
+  ) {
+    throw new Error(`Trendline lifecycle ${lifecycle.id} references an unavailable candle`);
+  }
+  return immutableTrendline({
+    id: lifecycle.id,
+    direction: lifecycle.direction,
+    anchorA: {
+      candleIndex: lifecycle.pointA.candleIndex,
+      openTime: lifecycle.pointA.openTime,
+      price: lifecycle.pointA.price
+    },
+    anchorB: {
+      candleIndex: lifecycle.pointB.candleIndex,
+      openTime: lifecycle.pointB.openTime,
+      price: lifecycle.pointB.price
+    },
+    slope: lifecycle.slope,
+    touchIndices: lifecycle.touchpoints.map(({ candleIndex }) => candleIndex),
+    qualifyingTouchCount: lifecycle.qualifyingTouchCount,
+    confirmedAtIndex,
+    confirmedAtTime: lifecycle.createdAt,
+    brokenAtIndex
+  });
+}
+
+function lineAtTime(
+  anchorA: { readonly openTime: number; readonly price: number },
+  anchorB: { readonly openTime: number; readonly price: number },
+  time: number
+): number {
+  const duration = anchorB.openTime - anchorA.openTime;
+  if (duration <= 0) throw new Error("Trendline anchors must have increasing timestamps");
+  return anchorA.price + (anchorB.price - anchorA.price) * (time - anchorA.openTime) / duration;
+}
+
 function createTimeframeAnalysis(
   timeframe: MarketTimeframe,
   input: readonly Candle[],
@@ -167,16 +252,40 @@ function createTimeframeAnalysis(
   const marketStructure = Object.freeze(
     classifyMarketStructure(candles, swings)
   );
-  const trendlines = timeframe === "4h"
-    ? Object.freeze(detectTrendlines(candles, swings).map(immutableTrendline))
-    : Object.freeze([] as Trendline[]);
+  const regime = classifyMarketRegime(candles, swings);
+  const marketRegime = Object.freeze({
+    ...regime,
+    structure: Object.freeze({
+      ...regime.structure,
+      latestHigh: regime.structure.latestHigh
+        ? immutableSwing(regime.structure.latestHigh)
+        : undefined,
+      latestLow: regime.structure.latestLow
+        ? immutableSwing(regime.structure.latestLow)
+        : undefined
+    })
+  });
+  const trendlineLifecycles = Object.freeze(timeframe === "4h"
+    ? buildTrendlineLifecycles(candles, swings, {
+        timeframe,
+      minimumTouches: 3,
+        asOfIndex: candles.length - 1
+      })
+    : []);
+  const trendlines = Object.freeze(timeframe === "4h"
+    ? trendlineLifecycles.map((lifecycle) =>
+        trendlineFromLifecycle(lifecycle, candles)
+      )
+    : []);
   return Object.freeze({
     timeframe,
     candles,
     availableAt: candles.at(-1)?.closeTime ?? null,
     swings,
     marketStructure,
-    trendlines
+    trendlines,
+    trendlineLifecycles,
+    marketRegime
   });
 }
 
@@ -208,22 +317,97 @@ function createCandidate(
   });
 }
 
-function evaluateCandidates(snapshot: MarketAnalysisSnapshot): SignalCandidate[] {
+interface CandidateEvaluation {
+  readonly candidates: SignalCandidate[];
+  readonly evaluations: StrategyEvaluation[];
+}
+
+function makeEvaluation(
+  evaluation: Omit<StrategyEvaluation, "evidence"> & { readonly evidence: readonly string[] }
+): StrategyEvaluation {
+  return Object.freeze({ ...evaluation, evidence: Object.freeze([...evaluation.evidence]) });
+}
+
+function makeAnalysisLine(
+  line: Trendline,
+  analysisTime: number,
+  status: AnalysisLine["status"],
+  breakStatus: AnalysisLine["breakStatus"]
+): AnalysisLine {
+  return Object.freeze({
+    id: line.id,
+    timeframe: "4h",
+    direction: line.direction,
+    anchorA: Object.freeze({ openTime: line.anchorA.openTime, price: line.anchorA.price }),
+    anchorB: Object.freeze({ openTime: line.anchorB.openTime, price: line.anchorB.price }),
+    projectedPrice: lineAtTime(
+      { openTime: line.anchorA.openTime, price: line.anchorA.price },
+      { openTime: line.anchorB.openTime, price: line.anchorB.price },
+      analysisTime
+    ),
+    status,
+    breakStatus,
+    source: "engineering_assumption"
+  });
+}
+
+function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluation {
   const timeframes = snapshot.timeframes;
   const execution = timeframes["5m"].candles;
   const nextCandle = snapshot.nextExecutionCandle;
-  if (!nextCandle || execution.length < 3) return [];
-
   const candidates: SignalCandidate[] = [];
-  const executionSwings = timeframes["5m"].swings;
-  const levels = executionSwings
-    .filter((swing) => swing.confirmedAt <= snapshot.analysisTime)
-    .map((swing) => ({
-      id: `${swing.direction}:${swing.openTime}`,
-      kind: swing.direction === "high" ? "swing_high" as const : "swing_low" as const,
-      price: swing.price,
-      confirmedAt: swing.confirmedAt
-    }));
+  const evaluations: StrategyEvaluation[] = [];
+  if (!nextCandle || execution.length < 3) {
+    for (const mode of TOP_DOWN_MODES) {
+      evaluations.push(makeEvaluation({
+        strategy: "top_down_trendline",
+        variation: mode,
+        status: "rejected",
+        direction: null,
+        relevantTimeframe: "5m",
+        evidence: [],
+        entryCondition: "Signal candle close followed by the immediate next 5-minute open.",
+        invalidationCondition: "No next execution candle or insufficient closed execution history.",
+        stopMethodology: "Opposing 4-hour Safety Line; unavailable.",
+        targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
+        reason: "A next execution candle and sufficient closed 5-minute history are required.",
+        signalId: null
+      }));
+    }
+    for (const strategy of [
+      "break_and_retest",
+      "liquidity_sweep_reversal",
+      "order_block_retest"
+    ] as const) {
+      evaluations.push(makeEvaluation({
+        strategy,
+        status: "rejected",
+        direction: null,
+        relevantTimeframe: "5m",
+        evidence: [],
+        entryCondition: "Setup-specific closed-candle confirmation followed by next 5-minute open.",
+        invalidationCondition: "No next execution candle or insufficient closed execution history.",
+        stopMethodology: "Strategy-specific stop; not evaluated.",
+        targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
+        reason: "A next execution candle and sufficient closed 5-minute history are required.",
+        signalId: null
+      }));
+    }
+    return { candidates, evaluations };
+  }
+
+  const levels = (["4h", "1h", "5m"] as const)
+    .flatMap((timeframe) => timeframes[timeframe].swings
+      .filter((swing) =>
+        swing.confirmedAt <= snapshot.analysisTime &&
+        swing.openTime < snapshot.signalCandle.openTime
+      )
+      .map((swing) => ({
+        id: `${timeframe}:${swing.direction}:${swing.openTime}`,
+        kind: swing.direction === "high" ? "swing_high" as const : "swing_low" as const,
+        price: swing.price,
+        confirmedAt: swing.confirmedAt
+      })));
 
   const higherTimeframeBias = createBias(timeframes);
   for (const mode of TOP_DOWN_MODES) {
@@ -234,12 +418,133 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): SignalCandidate[]
       fourHourTrendlines: timeframes["4h"].trendlines,
       higherTimeframeBias
     });
-    if (!signal) continue;
-    const plan = activateAtNextOpen(signal, nextCandle);
+    if (!signal) {
+      evaluations.push(makeEvaluation({
+        strategy: "top_down_trendline",
+        variation: mode,
+        status: "rejected",
+        direction: null,
+        relevantTimeframe: "4h",
+        evidence: [
+          `4h regime: ${timeframes["4h"].marketRegime.regime}`,
+          `5m analysis close: ${snapshot.analysisTime}`
+        ],
+        entryCondition: `Confirmed ${mode} on 5-minute close with available aligned higher-timeframe context.`,
+        invalidationCondition: "A confirmed close through the relevant trendline invalidates its setup.",
+        stopMethodology: "Opposing valid 4-hour Safety Line; no fixed-stop fallback.",
+        targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
+        reason: "No qualifying higher-timeframe-aligned trendline setup was confirmed.",
+        signalId: null
+      }));
+      continue;
+    }
     const trendline = timeframes["4h"].trendlines.find(({ id }) =>
       id === signal.trendlineId
     );
-    candidates.push(createCandidate(snapshot, {
+    const actionLifecycle = timeframes["4h"].trendlineLifecycles.find((item) =>
+      item.pointA.openTime === trendline?.anchorA.openTime &&
+      item.pointB.openTime === trendline?.anchorB.openTime
+    );
+    const actionLine = trendline
+      ? makeAnalysisLine(
+          trendline,
+          snapshot.analysisTime,
+          actionLifecycle?.isValid === false ? "broken" : "valid",
+          actionLifecycle?.breakStatus ?? "unbroken"
+        )
+      : undefined;
+    const expectedBreakStatus = signal.side === "buy" ? "broken_above" : "broken_below";
+    const actionLifecycleConfirmed = actionLifecycle !== undefined &&
+      (mode === "break"
+        ? actionLifecycle.breakStatus === expectedBreakStatus &&
+          actionLifecycle.brokenAt !== null &&
+          actionLifecycle.brokenAt <= snapshot.analysisTime
+        : mode === "retest"
+          ? actionLifecycle.breakStatus === expectedBreakStatus &&
+            actionLifecycle.brokenAt !== null &&
+            actionLifecycle.brokenAt <= snapshot.analysisTime
+          : actionLifecycle.isValid && actionLifecycle.breakStatus === "unbroken");
+    const safetyLine = timeframes["4h"].trendlines
+      .filter((line) => line.direction !== trendline?.direction)
+      .filter((line) => {
+        const lifecycle = timeframes["4h"].trendlineLifecycles.find((item) =>
+          item.pointA.openTime === line.anchorA.openTime &&
+          item.pointB.openTime === line.anchorB.openTime
+        );
+        if (!lifecycle?.isValid || lifecycle.breakStatus !== "unbroken") return false;
+        const projected = lineAtTime(
+          { openTime: line.anchorA.openTime, price: line.anchorA.price },
+          { openTime: line.anchorB.openTime, price: line.anchorB.price },
+          snapshot.analysisTime
+        );
+        const signalClose = Number(signal.signalCandle.close);
+        const nextOpen = Number(nextCandle.open);
+        return signal.side === "buy"
+          ? projected < signalClose && projected < nextOpen
+          : projected > signalClose && projected > nextOpen;
+      })
+      .sort((left, right) => {
+        const leftPrice = lineAtTime(
+          { openTime: left.anchorA.openTime, price: left.anchorA.price },
+          { openTime: left.anchorB.openTime, price: left.anchorB.price },
+          snapshot.analysisTime
+        );
+        const rightPrice = lineAtTime(
+          { openTime: right.anchorA.openTime, price: right.anchorA.price },
+          { openTime: right.anchorB.openTime, price: right.anchorB.price },
+          snapshot.analysisTime
+        );
+        return signal.side === "buy" ? rightPrice - leftPrice : leftPrice - rightPrice;
+      })[0];
+    if (!trendline || !actionLine || !actionLifecycleConfirmed || !safetyLine) {
+      evaluations.push(makeEvaluation({
+        strategy: "top_down_trendline",
+        variation: mode,
+        status: "rejected",
+        direction: signal.side,
+        relevantTimeframe: "4h",
+        evidence: [`Action line: ${signal.trendlineId}`],
+        entryCondition: `Confirmed ${mode} on 5-minute close.`,
+        invalidationCondition: "A confirmed close through the action line invalidates the setup.",
+        stopMethodology: "Opposing valid 4-hour Safety Line; no fixed-stop fallback.",
+        targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
+        reason: !safetyLine
+          ? "Rejected: no valid opposing 4-hour Safety Line is available."
+          : !actionLifecycleConfirmed
+            ? `Rejected: 4-hour Action Line lifecycle does not confirm the requested ${mode} condition.`
+            : "Rejected: action-line lifecycle evidence is incomplete.",
+        signalId: null
+      }));
+      continue;
+    }
+    const safetyAnalysisLine = makeAnalysisLine(safetyLine, snapshot.analysisTime, "valid", "unbroken");
+    const safetyBufferPercent = 0.1;
+    const safetyStop = safetyAnalysisLine.projectedPrice *
+      (signal.side === "buy"
+        ? 1 - safetyBufferPercent / 100
+        : 1 + safetyBufferPercent / 100);
+    const safetySignal = { ...signal, stopLoss: safetyStop };
+    let plan;
+    try {
+      plan = activateAtNextOpen(safetySignal, nextCandle);
+    } catch (error) {
+      evaluations.push(makeEvaluation({
+        strategy: "top_down_trendline",
+        variation: mode,
+        status: "rejected",
+        direction: signal.side,
+        relevantTimeframe: "4h",
+        evidence: [`Action line: ${actionLine.id}`, `Safety line: ${safetyAnalysisLine.id}`],
+        entryCondition: `Confirmed ${mode} on 5-minute close.`,
+        invalidationCondition: "A confirmed close through the Safety Line invalidates the setup.",
+        stopMethodology: `0.1% buffer beyond the opposing 4-hour Safety Line (engineering assumption).`,
+        targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
+        reason: error instanceof Error ? error.message : String(error),
+        signalId: null
+      }));
+      continue;
+    }
+    const candidate = createCandidate(snapshot, {
       symbol: snapshot.symbol,
       strategy: signal.strategy,
       side: signal.side,
@@ -256,39 +561,132 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): SignalCandidate[]
         .join(", "),
       chartCandles: execution,
       chartAnnotations: Object.freeze({
-        ...(trendline === undefined ? {} : {
-          trendline: Object.freeze({
-            id: trendline.id,
-            qualifyingTouchCount: trendline.qualifyingTouchCount,
-            anchorA: Object.freeze({
-              openTime: trendline.anchorA.openTime,
-              price: trendline.anchorA.price
-            }),
-            anchorB: Object.freeze({
-              openTime: trendline.anchorB.openTime,
-              price: trendline.anchorB.price
-            })
+        actionLine,
+        safetyLine: safetyAnalysisLine,
+        trendline: Object.freeze({
+          id: trendline.id,
+          qualifyingTouchCount: trendline.qualifyingTouchCount,
+          anchorA: Object.freeze({
+            openTime: trendline.anchorA.openTime,
+            price: trendline.anchorA.price
+          }),
+          anchorB: Object.freeze({
+            openTime: trendline.anchorB.openTime,
+            price: trendline.anchorB.price
           })
         }),
         levels: Object.freeze([]),
         zones: Object.freeze([])
       }),
       mode
+    });
+    candidates.push(candidate);
+    evaluations.push(makeEvaluation({
+      strategy: candidate.strategy,
+      variation: mode,
+      status: "setup_confirmed",
+      direction: candidate.side,
+      relevantTimeframe: "4h",
+      evidence: [
+        `Action line ${actionLine.id} (${actionLine.direction}), ${actionLine.status}.`,
+        `Safety line ${safetyAnalysisLine.id} (${safetyAnalysisLine.direction}), valid.`,
+        `5m close ${signal.signalCandle.close} at ${signal.signalCandle.closeTime}.`,
+        ...Object.entries(signal.higherTimeframeBias)
+          .map(([timeframe, bias]) => `${timeframe} ${bias}.`)
+      ],
+      entryCondition: `Enter at the immediate next 5-minute open (${plan.entryTime}).`,
+      invalidationCondition: `Confirmed close through Safety Line ${safetyAnalysisLine.id}.`,
+      stopMethodology: "0.1% buffer beyond the opposing 4-hour Safety Line (engineering assumption).",
+      targetMethodology: `${plan.target1R}R partial and ${plan.target2R}R TP2; runner may trail.`,
+      reason: "Trendline condition, higher-timeframe alignment, and opposing safety structure confirmed; portfolio risk gate remains downstream.",
+      signalId: candidate.signalId
     }));
   }
 
+  const breakAndRetest = evaluateBreakAndRetestState({
+    symbol: snapshot.symbol,
+    candles: execution,
+    levels
+  });
   const setups = [
-    evaluateBreakAndRetest({ symbol: snapshot.symbol, candles: execution, levels }),
-    evaluateLiquiditySweep({ symbol: snapshot.symbol, candles: execution, levels }),
-    evaluateOrderBlockRetest({
-      symbol: snapshot.symbol,
-      candles: execution,
-      atrValues: atr(execution)
-    })
+    {
+      strategy: "break_and_retest" as const,
+      timeframe: "5m" as const,
+      setup: breakAndRetest.setup,
+      state: breakAndRetest.state,
+      rejectedReason: breakAndRetest.state === "awaiting_retest"
+        ? "A confirmed breakout is awaiting a subsequent retest and directional rejection."
+        : breakAndRetest.state === "invalidated"
+          ? "The confirmed breakout level was invalidated before a valid retest entry."
+          : "No confirmed break, subsequent retest, and directional rejection were all present."
+    },
+    {
+      strategy: "liquidity_sweep_reversal" as const,
+      timeframe: "5m" as const,
+      setup: evaluateLiquiditySweep({
+        symbol: snapshot.symbol,
+        candles: execution,
+        levels,
+        higherTimeframeBias: timeframes["4h"].marketStructure.regime
+      }),
+      rejectedReason: "No confirmed swing sweep, reclaim, and reversal candle were all present."
+    },
+    {
+      strategy: "order_block_retest" as const,
+      timeframe: "5m" as const,
+      setup: evaluateOrderBlockRetest({
+        symbol: snapshot.symbol,
+        candles: execution,
+        atrValues: atr(execution)
+      }),
+      rejectedReason: "No valid displacement-origin zone survived invalidation and retest confirmation."
+    }
   ];
-  for (const setup of setups) {
-    if (!setup) continue;
-    const plan = activateSetupAtNextOpen(setup, nextCandle);
+  for (const item of setups) {
+    const setup = item.setup;
+    if (!setup) {
+      evaluations.push(makeEvaluation({
+        strategy: item.strategy,
+        status: "rejected",
+        direction: null,
+        relevantTimeframe: item.timeframe,
+        evidence: [
+          `Analysis timestamp: ${snapshot.analysisTime}.`,
+          ...(item.strategy === "break_and_retest"
+            ? [`Break/retest state: ${item.state}.`]
+            : []),
+          ...(item.strategy === "liquidity_sweep_reversal"
+            ? [`4h context: ${timeframes["4h"].marketStructure.regime}.`]
+            : [])
+        ],
+        entryCondition: "Setup-specific closed-candle confirmation followed by next 5-minute open.",
+        invalidationCondition: "See strategy-specific level/zone invalidation rules.",
+        stopMethodology: "Strategy-specific signal structure with configured buffer.",
+        targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
+        reason: item.rejectedReason,
+        signalId: null
+      }));
+      continue;
+    }
+    let plan;
+    try {
+      plan = activateSetupAtNextOpen(setup, nextCandle);
+    } catch (error) {
+      evaluations.push(makeEvaluation({
+        strategy: item.strategy,
+        status: "rejected",
+        direction: setup.side,
+        relevantTimeframe: item.timeframe,
+        evidence: [`Signal candle close: ${setup.signalCandle.close}.`],
+        entryCondition: "Entry at the immediate next 5-minute open.",
+        invalidationCondition: "Setup reference is invalidated before entry.",
+        stopMethodology: "Strategy-specific signal structure with configured buffer.",
+        targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
+        reason: error instanceof Error ? error.message : String(error),
+        signalId: null
+      }));
+      continue;
+    }
     const chartAnnotations: ChartAnnotations = setup.reference.kind === "level"
       ? Object.freeze({
           levels: Object.freeze([Object.freeze({
@@ -305,7 +703,7 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): SignalCandidate[]
             high: setup.reference.high
           })])
         });
-    candidates.push(createCandidate(snapshot, {
+    const candidate = createCandidate(snapshot, {
       symbol: snapshot.symbol,
       strategy: setup.strategy,
       side: setup.side,
@@ -320,9 +718,31 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): SignalCandidate[]
       higherTimeframeBias: "not applicable",
       chartCandles: execution,
       chartAnnotations
+    });
+    candidates.push(candidate);
+    evaluations.push(makeEvaluation({
+      strategy: item.strategy,
+      status: "setup_confirmed",
+      direction: candidate.side,
+      relevantTimeframe: item.timeframe,
+      evidence: [
+        `Confirmed ${item.strategy} setup on ${item.timeframe}.`,
+        ...(item.strategy === "liquidity_sweep_reversal"
+          ? [`4h context: ${timeframes["4h"].marketStructure.regime}.`]
+          : []),
+        setup.reference.kind === "level"
+          ? `Reference level: ${setup.reference.price}.`
+          : `Reference zone: ${setup.reference.low} - ${setup.reference.high}.`
+      ],
+      entryCondition: `Enter at the immediate next 5-minute open (${plan.entryTime}).`,
+      invalidationCondition: "Setup-specific level or zone invalidation before entry.",
+      stopMethodology: "Strategy-specific signal-candle extreme with configured buffer (engineering assumption).",
+      targetMethodology: `${plan.target1R}R partial and ${plan.target2R}R TP2; runner may trail.`,
+      reason: "Strategy-specific closed-candle conditions and minimum reward/risk are confirmed; portfolio risk gate remains downstream.",
+      signalId: candidate.signalId
     }));
   }
-  return candidates;
+  return { candidates, evaluations };
 }
 
 export class MarketAnalysisOrchestrator {
@@ -363,9 +783,11 @@ export class MarketAnalysisOrchestrator {
         ? immutableCandle(nextExecutionCandle)
         : null
     });
+    const evaluated = evaluateCandidates(snapshot);
     return Object.freeze({
       snapshot,
-      candidates: Object.freeze(evaluateCandidates(snapshot))
+      candidates: Object.freeze(evaluated.candidates),
+      evaluations: Object.freeze(evaluated.evaluations)
     });
   }
 }

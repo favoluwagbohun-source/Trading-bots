@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Candle } from "@crypto-signal/shared";
 import type { SignalCandidate } from "./signal-scanner.js";
 import { renderSignalChart } from "./chart-image.js";
+import { MarketAnalysisOrchestrator } from "./market-analysis.js";
 
 function sampleCandidate(): SignalCandidate {
   const candles: Candle[] = Array.from({ length: 8 }, (_, index) => {
@@ -51,6 +52,63 @@ describe("renderSignalChart", () => {
     expect([...bytes.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
     expect(rendered.image.size).toBeGreaterThan(1_000);
     expect(rendered.image.size).toBeLessThan(10 * 1024 * 1024);
+  });
+
+  it("renders Action and Safety Lines from chart annotations", async () => {
+    const candidate = sampleCandidate();
+    const start = candidate.chartCandles[1]!.openTime;
+    const end = candidate.chartCandles[5]!.openTime;
+    const rendered = renderSignalChart({
+      ...candidate,
+      chartAnnotations: {
+        ...candidate.chartAnnotations,
+        actionLine: {
+          id: "action",
+          timeframe: "4h",
+          direction: "ascending",
+          anchorA: { openTime: start, price: 101 },
+          anchorB: { openTime: end, price: 105 },
+          projectedPrice: 107,
+          status: "broken",
+          breakStatus: "broken_above",
+          source: "engineering_assumption"
+        },
+        safetyLine: {
+          id: "safety",
+          timeframe: "4h",
+          direction: "ascending",
+          anchorA: { openTime: start, price: 99 },
+          anchorB: { openTime: end, price: 103 },
+          projectedPrice: 105,
+          status: "valid",
+          breakStatus: "unbroken",
+          source: "engineering_assumption"
+        }
+      }
+    });
+
+    expect(rendered.image.size).toBeGreaterThan(1_000);
+  });
+
+  it("requires the renderer to use the exact standardized analysis snapshot", () => {
+    const candidate = sampleCandidate();
+    const snapshot = new MarketAnalysisOrchestrator().analyze(
+      candidate.symbol,
+      new Map([["5m", candidate.chartCandles]])
+    )!.snapshot;
+    const standardizedCandidate = {
+      ...candidate,
+      snapshotId: snapshot.snapshotId,
+      analysisSnapshot: snapshot,
+      signalCandle: snapshot.signalCandle,
+      chartCandles: snapshot.timeframes["5m"].candles
+    };
+
+    expect(() => renderSignalChart(standardizedCandidate)).not.toThrow();
+    expect(() => renderSignalChart({
+      ...standardizedCandidate,
+      chartCandles: [...standardizedCandidate.chartCandles]
+    })).toThrow("exact immutable analysis snapshot");
   });
 
   it("rejects chart data that includes an unfinished candle", () => {

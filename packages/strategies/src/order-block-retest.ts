@@ -9,6 +9,7 @@ export interface OrderBlockOptions {
   readonly displacementAtrMultiple: number;
   readonly maximumZoneAgeCandles: number;
   readonly stopBufferPercent: number;
+  readonly invalidationMode: "close" | "wick";
 }
 
 export interface OrderBlockInput {
@@ -21,7 +22,8 @@ export interface OrderBlockInput {
 const DEFAULT_OPTIONS: OrderBlockOptions = {
   displacementAtrMultiple: 2,
   maximumZoneAgeCandles: 100,
-  stopBufferPercent: 0.1
+  stopBufferPercent: 0.1,
+  invalidationMode: "close"
 };
 
 export function evaluateOrderBlockRetest(
@@ -33,6 +35,9 @@ export function evaluateOrderBlockRetest(
   }
   if (!Number.isInteger(options.maximumZoneAgeCandles) || options.maximumZoneAgeCandles < 1) {
     throw new Error("maximumZoneAgeCandles must be a positive integer");
+  }
+  if (options.invalidationMode !== "close" && options.invalidationMode !== "wick") {
+    throw new Error("invalidationMode must be close or wick");
   }
   validateTolerance(options.stopBufferPercent, "stopBufferPercent");
   if (input.atrValues.length !== input.candles.length) {
@@ -75,8 +80,12 @@ export function evaluateOrderBlockRetest(
       if (!between.closed) continue;
       if (
         displacementDirection === "buy"
-          ? Number(between.close) < zoneLow
-          : Number(between.close) > zoneHigh
+          ? options.invalidationMode === "close"
+            ? Number(between.close) < zoneLow
+            : Number(between.low) < zoneLow
+          : options.invalidationMode === "close"
+            ? Number(between.close) > zoneHigh
+            : Number(between.high) > zoneHigh
       ) {
         invalidated = true;
         break;

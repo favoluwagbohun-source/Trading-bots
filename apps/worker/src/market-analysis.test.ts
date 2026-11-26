@@ -49,6 +49,8 @@ describe("MarketAnalysisOrchestrator", () => {
     expect(result?.snapshot.timeframes["1h"].availableAt).toBeNull();
     expect(result?.snapshot.nextExecutionCandle?.openTime).toBe(900_000);
     expect(result?.snapshot.nextExecutionCandle?.closed).toBe(false);
+    expect(result?.evaluations).toHaveLength(6);
+    expect(result?.evaluations.every(({ status }) => status === "rejected")).toBe(true);
   });
 
   it("preserves an immutable candle snapshot and does not include future closed candles", () => {

@@ -3,6 +3,7 @@ import type { Candle } from "@crypto-signal/shared";
 import {
   activateSetupAtNextOpen,
   evaluateBreakAndRetest,
+  evaluateBreakAndRetestState,
   evaluateLiquiditySweep,
   evaluateOrderBlockRetest,
   type PriceLevel
@@ -52,6 +53,11 @@ describe("independent additional strategy prototypes", () => {
       side: "buy",
       reference: { kind: "level", price: 10 }
     });
+    expect(evaluateBreakAndRetestState({
+      symbol: "btcusdt",
+      candles,
+      levels: [level]
+    })).toMatchObject({ state: "retest_confirmed", levelId: level.id });
 
     const next = candle(4, { open: 10.5, high: 11, low: 10, close: 10.7 });
     const plan = activateSetupAtNextOpen(setup!, next);
@@ -77,6 +83,35 @@ describe("independent additional strategy prototypes", () => {
       candles,
       levels: [level]
     })).toBeUndefined();
+    expect(evaluateBreakAndRetestState({
+      symbol: "BTCUSDT",
+      candles,
+      levels: [level]
+    })).toMatchObject({ state: "invalidated", levelId: level.id });
+  });
+
+  it("distinguishes an active breakout awaiting a retest from a completed setup", () => {
+    const level: PriceLevel = {
+      id: "swing-high",
+      kind: "swing_high",
+      price: 10,
+      confirmedAt: 0
+    };
+    const evaluation = evaluateBreakAndRetestState({
+      symbol: "BTCUSDT",
+      levels: [level],
+      candles: [
+        candle(0, { open: 9, high: 10, low: 8, close: 9 }),
+        candle(1, { open: 9, high: 11, low: 9, close: 11 }),
+        candle(2, { open: 11, high: 12, low: 10.5, close: 11.5 })
+      ]
+    });
+
+    expect(evaluation).toMatchObject({
+      state: "awaiting_retest",
+      levelId: level.id
+    });
+    expect(evaluation.setup).toBeUndefined();
   });
 
   it("requires a closed sweep candle and a previously confirmed swing level", () => {
@@ -113,6 +148,32 @@ describe("independent additional strategy prototypes", () => {
     })).toBeUndefined();
   });
 
+  it("uses higher-timeframe bias to reject opposing liquidity-sweep setups", () => {
+    const level: PriceLevel = {
+      id: "4h-swing-low",
+      kind: "swing_low",
+      price: 100,
+      confirmedAt: 0
+    };
+    const candles = [
+      candle(0, { open: 100.5, high: 101, low: 99, close: 100.5 }),
+      candle(1, { open: 100.5, high: 101, low: 99, close: 100.8 })
+    ];
+
+    expect(evaluateLiquiditySweep({
+      symbol: "BTCUSDT",
+      candles,
+      levels: [level],
+      higherTimeframeBias: "bearish"
+    })).toBeUndefined();
+    expect(evaluateLiquiditySweep({
+      symbol: "BTCUSDT",
+      candles,
+      levels: [level],
+      higherTimeframeBias: "bullish"
+    })).toMatchObject({ side: "buy" });
+  });
+
   it("requires opposing base, ATR displacement, and confirmed zone retest", () => {
     const candles = [
       candle(0, { open: 101, high: 102, low: 99, close: 100 }),
@@ -134,6 +195,27 @@ describe("independent additional strategy prototypes", () => {
       symbol: "BTCUSDT",
       candles,
       atrValues: [1, 4, 1]
+    })).toBeUndefined();
+  });
+
+  it("allows the order-block invalidation rule to be selected independently", () => {
+    const candles = [
+      candle(0, { open: 101, high: 102, low: 99, close: 100 }),
+      candle(1, { open: 100, high: 107, low: 100, close: 106 }),
+      candle(2, { open: 102, high: 104, low: 98, close: 103 }),
+      candle(3, { open: 102, high: 105, low: 101, close: 104 })
+    ];
+
+    expect(evaluateOrderBlockRetest({
+      symbol: "BTCUSDT",
+      candles,
+      atrValues: [1, 2, 1, 1]
+    })).toMatchObject({ side: "buy" });
+    expect(evaluateOrderBlockRetest({
+      symbol: "BTCUSDT",
+      candles,
+      atrValues: [1, 2, 1, 1],
+      options: { invalidationMode: "wick" }
     })).toBeUndefined();
   });
 

@@ -70,12 +70,24 @@ small, independently verified stages and is not considered complete:
 - Top-down trendline rules use engineering assumptions, are not source-verified
   as Tori Trades methodology, and use the signal candle as the stop rather than
   a separately identified opposing Safety Line.
-- Trendline construction is pairwise swing-anchor detection, not progressive
-  Point A/Point B lifecycle tracking; touch validation and structural
-  violations need stronger modeling.
-- Market-structure regime classification is only bullish, bearish, or neutral;
-  volatility regimes and structured per-strategy approval/rejection evidence
-  are not yet implemented.
+- Progressive 4-hour Point A/Point B lifecycle tracking now records touches,
+  structural violations, validity, and close-confirmed breaks. The top-down
+  scanner consumes trendlines derived from those same lifecycle anchors.
+- The analysis snapshot now classifies six deterministic regimes (bullish,
+  bearish, range, high volatility, low volatility, and uncertain transition)
+  and records a structured approval/rejection evaluation for each strategy
+  variation. The thresholds are configurable engineering assumptions, not
+  calibrated trading parameters.
+- Top-down candidates require a valid opposing 4-hour Safety Line; the chart
+  includes Action/Safety Line annotations, and the 0.1% stop buffer is an
+  explicitly labeled engineering assumption.
+- Liquidity sweeps now consume confirmed 4-hour/1-hour/5-minute levels and
+  reject a sweep opposed to 4-hour structure. Break/retest evaluation exposes
+  explicit no-break, awaiting-retest, invalidated, and confirmed states.
+- Order-block invalidation can be configured as close-through or wick-through.
+- Research tooling now supports rolling walk-forward selection on prior-only
+  training windows, parameter-sensitivity and fee/slippage stress runs,
+  timestamped regime breakdowns, and closed-paper-trade comparisons.
 - Backtesting has chronological held-out folds, but parameter sensitivity,
   fee/slippage stress matrices, walk-forward selection protocols,
   market-regime breakdown, and live paper-vs-research comparison remain
@@ -83,16 +95,17 @@ small, independently verified stages and is not considered complete:
 - No reviewable licensed historical dataset is included; the project must not
   claim strategy profitability from its deterministic test fixtures.
 
-The first implementation stage adds `MarketAnalysisOrchestrator`. It validates
-candle values and ordering, synchronizes closed candles independently by
-timeframe to the latest closed 5-minute analysis timestamp, freezes the
-resulting snapshot, and passes that same snapshot to the existing strategy
-evaluators. Higher-timeframe bars are selected by their own close timestamps;
-they are not assumed to close simultaneously. The worker's chart candles and
-signal candle reference the synchronized snapshot. Market-data validation now
-also rejects non-finite volume and negative timestamps.
+`MarketAnalysisOrchestrator` validates candle values and ordering, synchronizes
+closed candles independently by timeframe to the latest closed 5-minute
+analysis timestamp, freezes the resulting snapshot, and passes that same
+snapshot to strategy evaluators. Higher-timeframe bars are selected by their
+own close timestamps; they are not assumed to close simultaneously. The
+worker's chart candles and signal candle reference the synchronized snapshot.
+Market-data validation also rejects non-finite volume and negative timestamps.
 
-Still incomplete: structured strategy rejection reports, documented six-state
-market regimes, progressive trendline lifecycle and source research,
-first-class Action/Safety Lines, broader statistical validation, and
-chart-renderer consumption of the complete standardized analysis object.
+Still incomplete: source verification of the requested external methodology,
+full multi-timeframe supply/demand and higher-timeframe setup refinement, and
+execution of validation against licensed, timestamped historical data and
+ongoing live paper results. The repository has no such reviewable dataset, so
+no market-performance claims are made. Synthetic test fixtures verify
+deterministic behavior only.

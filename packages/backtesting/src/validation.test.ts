@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Candle } from "@crypto-signal/shared";
-import { runOutOfSampleValidation } from "./validation.js";
+import {
+  compareResearchToPaper,
+  runCostStressTest,
+  runOutOfSampleValidation,
+  runParameterSensitivity,
+  runRegimeBreakdown,
+  runWalkForwardValidation
+} from "./index.js";
 import type { BacktestConfig } from "./types.js";
 
 function candle(index: number, closed = true): Candle {
@@ -101,5 +108,98 @@ describe("out-of-sample validation", () => {
       validation: { warmupBars: 2, evaluationBars: 4 },
       evaluateSignal: () => undefined
     })).toThrow("at least one complete");
+  });
+
+  it("selects walk-forward configurations using only prior training candles", () => {
+    const candles = Array.from({ length: 10 }, (_, index) => candle(index));
+    const selections: Array<{ fold: number; trainingEnd: number }> = [];
+    const report = runWalkForwardValidation({
+      candles,
+      trainingBars: 2,
+      evaluationBars: 4,
+      select: (trainingCandles, fold) => {
+        selections.push({ fold, trainingEnd: trainingCandles.at(-1)!.closeTime });
+        return {
+          options,
+          evaluateSignal: (prefix, index) => {
+            if (index !== 2 && index !== 6) return undefined;
+            return {
+              strategy: "break_and_retest",
+              side: "buy",
+              signalTime: prefix.at(-1)!.closeTime,
+              stopPrice: 95
+            };
+          }
+        };
+      }
+    });
+
+    expect(report.folds.map(({ startIndex, endIndex }) => [startIndex, endIndex]))
+      .toEqual([[2, 5], [6, 9]]);
+    expect(selections).toHaveLength(2);
+    expect(selections[0]!.trainingEnd).toBeLessThan(candles[2]!.openTime);
+    expect(selections[1]!.trainingEnd).toBeLessThan(candles[6]!.openTime);
+  });
+
+  it("reports parameter sensitivity, fee/slippage stress, and regime breakdown", () => {
+    const candles = Array.from({ length: 10 }, (_, index) => candle(index));
+    const evaluateSignal = (prefix: readonly Candle[], index: number) => {
+      if (index !== 2 && index !== 6) return undefined;
+      return {
+        strategy: "break_and_retest" as const,
+        side: "buy" as const,
+        signalTime: prefix.at(-1)!.closeTime,
+        stopPrice: 95
+      };
+    };
+    const validation = { warmupBars: 2, evaluationBars: 4 };
+
+    const sensitivity = runParameterSensitivity({
+      candles,
+      validation,
+      variants: [
+        { id: "baseline", options, evaluateSignal },
+        { id: "higher-cost", options, evaluateSignal }
+      ]
+    });
+    expect(sensitivity.map(({ id }) => id)).toEqual(["baseline", "higher-cost"]);
+
+    const costs = runCostStressTest({
+      candles,
+      options,
+      evaluateSignal,
+      validation,
+      scenarios: [
+        { id: "zero-cost", costs: { feeRatePerSide: 0, slippageRatePerSide: 0 } },
+        { id: "stressed", costs: { feeRatePerSide: 0.01, slippageRatePerSide: 0.01 } }
+      ]
+    });
+    expect(costs[1]!.result.summary.totalNetPnl)
+      .toBeLessThan(costs[0]!.result.summary.totalNetPnl);
+
+    const regimes = runRegimeBreakdown({
+      candles,
+      options,
+      evaluateSignal,
+      validation,
+      regimeForCandle: (_candle, index) => index < 6 ? "quiet" : "volatile"
+    });
+    expect(regimes.regimes.map(({ regime, totalTrades }) => [regime, totalTrades]))
+      .toEqual([["quiet", 1], ["volatile", 1]]);
+  });
+
+  it("compares research and closed paper-trade results without treating open trades as closed", () => {
+    expect(compareResearchToPaper({
+      researchNetPnl: [10, -5],
+      closedPaperNetPnl: [7]
+    })).toEqual({
+      researchTrades: 2,
+      paperTrades: 1,
+      researchNetPnl: 5,
+      paperNetPnl: 7,
+      netPnlDifference: 2,
+      researchMeanTradePnl: 2.5,
+      paperMeanTradePnl: 7
+    });
   });
 });

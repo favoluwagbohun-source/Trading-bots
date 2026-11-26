@@ -47,3 +47,13 @@ trades are weak or insufficient evidence, not a pass. Validation still
 requires licensed, timestamped market data and realistic fee/slippage inputs;
 the repository does not include a validated historical dataset or claim any
 strategy is profitable.
+
+`runWalkForwardValidation` calls a parameter-selection callback with only the
+preceding fixed-size training window, then evaluates that selection on the
+next disjoint test window. `runParameterSensitivity` and `runCostStressTest`
+rerun fixed rules across explicitly named variants and fee/slippage scenarios;
+they report results without selecting a winning variant. `runRegimeBreakdown`
+groups held-out trades by a caller-supplied, timestamp-aware regime label.
+`compareResearchToPaper` compares supplied research PnL values with closed
+paper-trade PnL values only; open trades must not be included. These helpers
+require real historical inputs and do not imply performance.

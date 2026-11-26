@@ -10,6 +10,7 @@ export interface LiquiditySweepInput {
   readonly symbol: string;
   readonly candles: readonly Candle[];
   readonly levels: readonly PriceLevel[];
+  readonly higherTimeframeBias?: "bullish" | "bearish" | "neutral";
   readonly options?: Partial<LiquiditySweepOptions>;
 }
 
@@ -38,6 +39,7 @@ export function evaluateLiquiditySweep(
     }
     if (
       level.kind === "swing_low" &&
+      input.higherTimeframeBias !== "bearish" &&
       low < level.price * (1 - options.minimumSweepPercent / 100) &&
       close > level.price &&
       close > open
@@ -53,6 +55,7 @@ export function evaluateLiquiditySweep(
     }
     if (
       level.kind === "swing_high" &&
+      input.higherTimeframeBias !== "bullish" &&
       high > level.price * (1 + options.minimumSweepPercent / 100) &&
       close < level.price &&
       close < open

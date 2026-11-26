@@ -17,8 +17,11 @@ directional close. Position sizing is not included; that belongs to Stage 7.
 The live worker now builds an immutable, timestamp-synchronized analysis
 snapshot before calling the strategy detectors. This prevents unfinished or
 later-closing higher-timeframe candles from entering an earlier 5-minute
-decision. It does not make the prototype rules source-verified or replace the
-signal-candle stop with a separately modeled Safety Line.
+decision. Its 4-hour trendlines use progressive adjacent Point A/Point B swing
+pairs, require a third confirmed touch, and reject structural violations.
+Top-down setups require a valid opposing 4-hour Safety Line; the 0.1% buffer
+and lifecycle tolerances remain engineering assumptions. It does not make the
+prototype rules source-verified.
 
 ## Additional strategy prototypes
 
@@ -31,13 +34,17 @@ not imply profitability.
   a setup if an intervening candle closes back across the level.
 - `evaluateLiquiditySweep`: requires a closed candle to strictly pass a
   previously confirmed swing high/low, then close back inside with a
-  directionally confirming body.
+  directionally confirming body. The worker supplies 4-hour/1-hour/5-minute
+  confirmed levels and rejects sweeps opposed to the 4-hour structure.
 - `evaluateOrderBlockRetest`: uses the adjacent opposing candle as the zone,
   requires a displacement body of at least the configured ATR multiple (default
   2 ATR), and waits for a later retest with a directional close. Full candle
-  high/low defines the zone.
+  high/low defines the zone; the invalidation rule can be selected as close-
+  through or wick-through.
 
 Each detector emits its own setup, reference level/zone, stop, and next-candle
-entry time. `activateSetupAtNextOpen` creates separate R-based target plans and
-rejects entries with non-positive risk or TP2 below 2R. Position sizing,
-performance reports, and grades remain future stages.
+entry time. `evaluateBreakAndRetestState` distinguishes no break, awaiting
+retest, invalidation, and confirmed retest. `activateSetupAtNextOpen` creates
+separate R-based target plans and rejects entries with non-positive risk or
+TP2 below 2R. Position sizing and publish gating remain in the worker's
+existing risk pipeline.

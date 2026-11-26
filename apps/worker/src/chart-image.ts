@@ -71,6 +71,17 @@ export function renderSignalChart(candidate: SignalChart): RenderedSignalChart {
   if (!candidate.chartCandles.every((candle) => candle.closed)) {
     throw new Error("Signal chart cannot include unfinished candles");
   }
+  if (candidate.analysisSnapshot) {
+    const snapshot = candidate.analysisSnapshot;
+    if (
+      candidate.snapshotId !== snapshot.snapshotId ||
+      candidate.symbol !== snapshot.symbol ||
+      candidate.signalCandle !== snapshot.signalCandle ||
+      candidate.chartCandles !== snapshot.timeframes["5m"].candles
+    ) {
+      throw new Error("Signal chart must consume its exact immutable analysis snapshot");
+    }
+  }
 
   const candles = candidate.chartCandles.slice(-MAX_CANDLES);
   const last = candles.at(-1)!;
@@ -118,6 +129,32 @@ export function renderSignalChart(candidate: SignalChart): RenderedSignalChart {
     if (zone.high <= zone.low) throw new Error("Chart zone high must exceed its low");
     priceValues.push(zone.low, zone.high);
   }
+  for (const line of [
+    candidate.chartAnnotations.actionLine,
+    candidate.chartAnnotations.safetyLine
+  ]) {
+    if (!line) continue;
+    if (line.anchorA.openTime >= line.anchorB.openTime) {
+      throw new Error(`${line.id} anchors must have increasing timestamps`);
+    }
+    const slope =
+      (line.anchorB.price - line.anchorA.price) /
+      (line.anchorB.openTime - line.anchorA.openTime);
+    const startPrice = line.anchorA.price + slope * (startTime - line.anchorA.openTime);
+    const endPrice = line.anchorA.price + slope * (endTime - line.anchorA.openTime);
+    assertPositivePrice(line.anchorA.price, `${line.id} Point A`);
+    assertPositivePrice(line.anchorB.price, `${line.id} Point B`);
+    assertPositivePrice(line.projectedPrice, `${line.id} projection`);
+    assertPositivePrice(startPrice, `${line.id} chart start`);
+    assertPositivePrice(endPrice, `${line.id} chart end`);
+    priceValues.push(
+      line.anchorA.price,
+      line.anchorB.price,
+      line.projectedPrice,
+      startPrice,
+      endPrice
+    );
+  }
   if (trendline) {
     assertPositivePrice(trendline.anchorA.price, "Trendline anchor A");
     assertPositivePrice(trendline.anchorB.price, "Trendline anchor B");
@@ -151,6 +188,34 @@ export function renderSignalChart(candidate: SignalChart): RenderedSignalChart {
     elements.push(svgLine(PLOT.left, y, PLOT.right, y, COLORS.grid, 1));
     elements.push(
       `<text x="${PLOT.right + 12}" y="${(y + 5).toFixed(2)}" fill="${COLORS.muted}" font-size="13">${price.toPrecision(6)}</text>`
+    );
+  }
+
+  for (const line of [
+    candidate.chartAnnotations.actionLine,
+    candidate.chartAnnotations.safetyLine
+  ]) {
+    if (!line) continue;
+    const isActionLine = line === candidate.chartAnnotations.actionLine;
+    const color = isActionLine ? COLORS.trendline : COLORS.stop;
+    const slope =
+      (line.anchorB.price - line.anchorA.price) /
+      (line.anchorB.openTime - line.anchorA.openTime);
+    const startPrice = line.anchorA.price +
+      slope * (startTime - line.anchorA.openTime);
+    const endPrice = line.anchorA.price +
+      slope * (endTime - line.anchorA.openTime);
+    elements.push(svgLine(
+      PLOT.left,
+      yForPrice(startPrice),
+      PLOT.right,
+      yForPrice(endPrice),
+      color,
+      2,
+      isActionLine ? "8 5" : "4 4"
+    ));
+    elements.push(
+      `<text x="${PLOT.left + 8}" y="${PLOT.top + (isActionLine ? 17 : 34)}" fill="${color}" font-size="12">${isActionLine ? "Action" : "Safety"} · ${escapeXml(line.id)} · ${line.status}</text>`
     );
   }
 
