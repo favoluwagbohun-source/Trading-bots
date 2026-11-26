@@ -99,6 +99,13 @@ describe("SignalScanner", () => {
       entryPrice: 10.5
     });
     expect(firstScan[0]!.chartCandles.at(-1)).toEqual(executionCandles[8]);
+    expect(firstScan[0]!.chartCandles).toBe(
+      firstScan[0]!.analysisSnapshot.timeframes["5m"].candles
+    );
+    expect(firstScan[0]!.signalCandle).toBe(
+      firstScan[0]!.analysisSnapshot.signalCandle
+    );
+    expect(Object.isFrozen(firstScan[0]!.analysisSnapshot)).toBe(true);
     expect(await scanner.scanOnce()).toEqual([]);
     expect(onCandidate).toHaveBeenCalledTimes(1);
   });

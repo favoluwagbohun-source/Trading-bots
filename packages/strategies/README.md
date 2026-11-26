@@ -14,6 +14,12 @@ onto the 5-minute execution candles using timestamp anchors. A retest requires a
 recent confirmed close across that line followed by a confirmed revisit and
 directional close. Position sizing is not included; that belongs to Stage 7.
 
+The live worker now builds an immutable, timestamp-synchronized analysis
+snapshot before calling the strategy detectors. This prevents unfinished or
+later-closing higher-timeframe candles from entering an earlier 5-minute
+decision. It does not make the prototype rules source-verified or replace the
+signal-candle stop with a separately modeled Safety Line.
+
 ## Additional strategy prototypes
 
 These are independently callable detectors. Their thresholds and candle rules

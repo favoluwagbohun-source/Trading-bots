@@ -40,6 +40,22 @@ describe("market-data candles", () => {
     })).toThrow("Invalid OHLC");
   });
 
+  it("rejects invalid volume and negative timestamps", () => {
+    const valid = {
+      openTime: 1,
+      closeTime: 2,
+      open: "100",
+      high: "101",
+      low: "99",
+      close: "100",
+      volume: "1",
+      closed: true
+    };
+    expect(() => validateCandle({ ...valid, volume: "NaN" })).toThrow("Invalid candle volume");
+    expect(() => validateCandle({ ...valid, volume: "-1" })).toThrow("Invalid candle volume");
+    expect(() => validateCandle({ ...valid, openTime: -1 })).toThrow("Invalid candle timestamps");
+  });
+
   it("deduplicates unchanged candles and stores candle updates", () => {
     const store = new CandleStore();
     const candle = {

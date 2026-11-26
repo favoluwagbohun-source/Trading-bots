@@ -1,6 +1,6 @@
 import { Resvg } from "@resvg/resvg-js";
 import type { Candle } from "@crypto-signal/shared";
-import type { SignalCandidate } from "./signal-scanner.js";
+import type { SignalChart } from "./market-analysis.js";
 
 const WIDTH = 1280;
 const HEIGHT = 760;
@@ -61,7 +61,7 @@ function candlePrice(candle: Candle, field: "open" | "high" | "low" | "close"): 
   return value;
 }
 
-export function renderSignalChart(candidate: SignalCandidate): RenderedSignalChart {
+export function renderSignalChart(candidate: SignalChart): RenderedSignalChart {
   if (!candidate.snapshotId.trim() || !candidate.symbol.trim()) {
     throw new Error("Signal chart requires a snapshot ID and symbol");
   }

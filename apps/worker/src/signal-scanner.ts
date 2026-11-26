@@ -1,67 +1,15 @@
-import { atr, classifyMarketStructure, detectTrendlines, findConfirmedSwings } from "@crypto-signal/indicators";
-import type { Candle, StrategyId } from "@crypto-signal/shared";
-import {
-  activateAtNextOpen,
-  activateSetupAtNextOpen,
-  evaluateBreakAndRetest,
-  evaluateLiquiditySweep,
-  evaluateOrderBlockRetest,
-  evaluateTopDownTrendline,
-  TOP_DOWN_TIMEFRAMES,
-  type EntryMode,
-  type TopDownBias,
-  type TopDownTimeframe
-} from "@crypto-signal/strategies";
+import type { Candle } from "@crypto-signal/shared";
 import type { BinanceRestClient } from "@crypto-signal/market-data";
 import type { MarketTimeframe } from "@crypto-signal/market-data";
+import {
+  ANALYSIS_TIMEFRAMES,
+  MarketAnalysisOrchestrator,
+  type SignalCandidate
+} from "./market-analysis.js";
 
-const TIMEFRAME_MAP: Readonly<Record<TopDownTimeframe, MarketTimeframe>> = {
-  "1M": "1M",
-  "1W": "1w",
-  "1D": "1d",
-  "4H": "4h",
-  "1H": "1h"
-};
-const SCAN_TIMEFRAMES: readonly MarketTimeframe[] = [
-  "1M", "1w", "1d", "4h", "1h", "5m"
-];
-const TOP_DOWN_MODES: readonly EntryMode[] = ["break", "bounce", "retest"];
 const CANDIDATE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-export interface SignalCandidate {
-  readonly signalId: string;
-  readonly snapshotId: string;
-  readonly symbol: string;
-  readonly strategy: StrategyId;
-  readonly side: "buy" | "sell";
-  readonly signalCandle: Candle;
-  readonly entryCandleOpenTime: number;
-  readonly entryPrice: number;
-  readonly stopLoss: number;
-  readonly target1: number;
-  readonly target2: number;
-  readonly target3: "trailing_runner";
-  readonly minimumRiskReward: number;
-  readonly higherTimeframeBias: string;
-  readonly chartCandles: readonly Candle[];
-  readonly chartAnnotations: ChartAnnotations;
-  readonly mode?: EntryMode;
-}
-
-export interface ChartAnnotations {
-  readonly trendline?: {
-    readonly id: string;
-    readonly qualifyingTouchCount: number;
-    readonly anchorA: { readonly openTime: number; readonly price: number };
-    readonly anchorB: { readonly openTime: number; readonly price: number };
-  };
-  readonly levels: readonly { readonly label: string; readonly price: number }[];
-  readonly zones: readonly {
-    readonly label: string;
-    readonly low: number;
-    readonly high: number;
-  }[];
-}
+export type { ChartAnnotations, SignalCandidate } from "./market-analysis.js";
 
 export interface SignalScannerOptions {
   readonly symbols: readonly string[];
@@ -84,183 +32,6 @@ function normalizeSymbols(symbols: readonly string[]): string[] {
   return normalized;
 }
 
-function closedCandlesAsOf(candles: readonly Candle[], asOfTime: number): Candle[] {
-  return candles.filter((candle) => candle.closed && candle.closeTime <= asOfTime);
-}
-
-function timeframeBias(candles: readonly Candle[]): TopDownBias[TopDownTimeframe] | undefined {
-  const latest = candles.at(-1);
-  if (!latest) return undefined;
-  const swings = findConfirmedSwings(candles, { leftBars: 2, rightBars: 2 });
-  const structure = classifyMarketStructure(candles, swings);
-  return { regime: structure.regime, availableAt: latest.closeTime };
-}
-
-function toCandidate(
-  args: {
-    readonly symbol: string;
-    readonly strategy: StrategyId;
-    readonly side: "buy" | "sell";
-    readonly signalCandle: Candle;
-    readonly entryCandleOpenTime: number;
-    readonly entryPrice: number;
-    readonly stopLoss: number;
-    readonly target1: number;
-    readonly target2: number;
-    readonly target3: "trailing_runner";
-    readonly minimumRiskReward: number;
-    readonly higherTimeframeBias: string;
-    readonly chartCandles: readonly Candle[];
-    readonly chartAnnotations: ChartAnnotations;
-    readonly mode?: EntryMode;
-  }
-): SignalCandidate {
-  const suffix = args.mode ? `:${args.mode}` : "";
-  return {
-    signalId: `${args.symbol}:${args.strategy}${suffix}:${args.signalCandle.openTime}`,
-    snapshotId: `${args.symbol}:5m:${args.signalCandle.openTime}`,
-    ...args
-  };
-}
-
-function asTopDownBias(
-  datasets: ReadonlyMap<MarketTimeframe, readonly Candle[]>,
-  asOfTime: number
-): TopDownBias {
-  const result: TopDownBias = {};
-  for (const timeframe of TOP_DOWN_TIMEFRAMES) {
-    const candles = closedCandlesAsOf(
-      datasets.get(TIMEFRAME_MAP[timeframe]) ?? [],
-      asOfTime
-    );
-    const bias = timeframeBias(candles);
-    if (bias) result[timeframe] = bias;
-  }
-  return result;
-}
-
-function createCandidates(
-  symbol: string,
-  datasets: ReadonlyMap<MarketTimeframe, readonly Candle[]>
-): SignalCandidate[] {
-  const rawExecutionCandles = datasets.get("5m") ?? [];
-  const latestClosed = rawExecutionCandles
-    .filter((candle) => candle.closed)
-    .at(-1);
-  if (!latestClosed) return [];
-
-  const asOfTime = latestClosed.closeTime;
-  const executionCandles = closedCandlesAsOf(rawExecutionCandles, asOfTime);
-  const nextCandle = rawExecutionCandles.find(
-    (candle) => candle.openTime === latestClosed.closeTime + 1
-  );
-  if (!nextCandle || nextCandle.closed || executionCandles.length < 3) return [];
-
-  const swings = findConfirmedSwings(executionCandles, { leftBars: 2, rightBars: 2 });
-  const levels = swings
-    .filter((swing) => swing.confirmedAt <= asOfTime)
-    .map((swing) => ({
-      id: `${swing.direction}:${swing.openTime}`,
-      kind: swing.direction === "high" ? "swing_high" as const : "swing_low" as const,
-      price: swing.price,
-      confirmedAt: swing.confirmedAt
-    }));
-  const candidates: SignalCandidate[] = [];
-
-  const fourHourCandles = closedCandlesAsOf(datasets.get("4h") ?? [], asOfTime);
-  const fourHourSwings = findConfirmedSwings(fourHourCandles, {
-    leftBars: 2,
-    rightBars: 2
-  });
-  const trendlines = detectTrendlines(fourHourCandles, fourHourSwings);
-  const higherTimeframeBias = asTopDownBias(datasets, asOfTime);
-  for (const mode of TOP_DOWN_MODES) {
-    const signal = evaluateTopDownTrendline({
-      symbol,
-      mode,
-      executionCandles,
-      fourHourTrendlines: trendlines,
-      higherTimeframeBias
-    });
-    if (!signal) continue;
-    const plan = activateAtNextOpen(signal, nextCandle);
-    const trendline = trendlines.find(({ id }) => id === signal.trendlineId);
-    candidates.push(toCandidate({
-      symbol,
-      strategy: signal.strategy,
-      side: signal.side,
-      signalCandle: signal.signalCandle,
-      entryCandleOpenTime: plan.entryTime,
-      entryPrice: plan.entryPrice,
-      stopLoss: plan.stopLoss,
-      target1: plan.target1,
-      target2: plan.target2,
-      target3: plan.target3,
-      minimumRiskReward: plan.minimumRiskReward,
-      higherTimeframeBias: Object.entries(signal.higherTimeframeBias)
-        .map(([timeframe, bias]) => `${timeframe}:${bias}`)
-        .join(", "),
-      chartCandles: executionCandles,
-      chartAnnotations: {
-        ...(trendline === undefined ? {} : {
-          trendline: {
-            id: trendline.id,
-            qualifyingTouchCount: trendline.qualifyingTouchCount,
-            anchorA: { openTime: trendline.anchorA.openTime, price: trendline.anchorA.price },
-            anchorB: { openTime: trendline.anchorB.openTime, price: trendline.anchorB.price }
-          }
-        }),
-        levels: [],
-        zones: []
-      },
-      mode
-    }));
-  }
-
-  const setups = [
-    evaluateBreakAndRetest({ symbol, candles: executionCandles, levels }),
-    evaluateLiquiditySweep({ symbol, candles: executionCandles, levels }),
-    evaluateOrderBlockRetest({
-      symbol,
-      candles: executionCandles,
-      atrValues: atr(executionCandles)
-    })
-  ];
-  for (const setup of setups) {
-    if (!setup) continue;
-    const plan = activateSetupAtNextOpen(setup, nextCandle);
-    candidates.push(toCandidate({
-      symbol,
-      strategy: setup.strategy,
-      side: setup.side,
-      signalCandle: setup.signalCandle,
-      entryCandleOpenTime: plan.entryTime,
-      entryPrice: plan.entryPrice,
-      stopLoss: plan.stopLoss,
-      target1: plan.target1,
-      target2: plan.target2,
-      target3: plan.target3,
-      minimumRiskReward: plan.minimumRiskReward,
-      higherTimeframeBias: "not applicable",
-      chartCandles: executionCandles,
-      chartAnnotations: setup.reference.kind === "level"
-        ? {
-            levels: [{ label: "Reference level", price: setup.reference.price }],
-            zones: []
-          }
-        : {
-            levels: [],
-            zones: [{
-              label: "Supply/demand zone",
-              low: setup.reference.low,
-              high: setup.reference.high
-            }]
-          }
-    }));
-  }
-  return candidates;
-}
-
 function waitForNextScan(intervalMs: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
@@ -281,6 +52,7 @@ export class SignalScanner {
   private readonly symbols: readonly string[];
   private readonly historyLimit: number;
   private readonly emittedCandidates = new Map<string, number>();
+  private readonly analysis = new MarketAnalysisOrchestrator();
 
   constructor(private readonly options: SignalScannerOptions) {
     this.symbols = normalizeSymbols(options.symbols);
@@ -297,7 +69,7 @@ export class SignalScanner {
     const emitted: SignalCandidate[] = [];
     for (const symbol of this.symbols) {
       try {
-        const results = await Promise.allSettled(SCAN_TIMEFRAMES.map((timeframe) =>
+        const results = await Promise.allSettled(ANALYSIS_TIMEFRAMES.map((timeframe) =>
           this.options.client.getHistoricalKlines({
               symbol,
               timeframe,
@@ -306,7 +78,7 @@ export class SignalScanner {
         ));
         const datasets = new Map<MarketTimeframe, readonly Candle[]>();
         for (const [index, result] of results.entries()) {
-          const timeframe = SCAN_TIMEFRAMES[index]!;
+          const timeframe = ANALYSIS_TIMEFRAMES[index]!;
           if (result.status === "fulfilled") {
             datasets.set(timeframe, result.value);
           } else {
@@ -320,8 +92,8 @@ export class SignalScanner {
         if (this.options.onCandles) {
           await this.options.onCandles(symbol, datasets.get("5m")!);
         }
-        const candidates = createCandidates(symbol, datasets);
-        for (const candidate of candidates) {
+        const analysis = this.analysis.analyze(symbol, datasets);
+        for (const candidate of analysis?.candidates ?? []) {
           if (this.emittedCandidates.has(candidate.signalId)) continue;
           await this.options.onCandidate(candidate);
           this.emittedCandidates.set(candidate.signalId, Date.now());

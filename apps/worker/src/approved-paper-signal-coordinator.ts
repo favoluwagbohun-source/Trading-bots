@@ -16,6 +16,7 @@ import {
 import type { TelegramApiClient } from "@crypto-signal/telegram";
 import { PaperTradeLedger, type ManagedPaperTrade } from "./paper-trade-ledger.js";
 import { renderSignalChart } from "./chart-image.js";
+import type { SignalChart } from "./market-analysis.js";
 import { scoreSignalQuality, type StrategyQualityEvidence } from "./signal-quality.js";
 import { SignalRiskGate } from "./signal-risk-gate.js";
 import type { SignalCandidate } from "./signal-scanner.js";
@@ -63,7 +64,7 @@ function candidateForTradeEvent(
   trade: ManagedPaperTrade,
   eventSnapshotId: string,
   candles: readonly Candle[]
-): SignalCandidate {
+): SignalChart {
   const snapshotOpenTime = Number(eventSnapshotId.split(":").at(-1));
   if (!Number.isFinite(snapshotOpenTime)) {
     throw new Error(`Invalid paper-trade event snapshot: ${eventSnapshotId}`);
@@ -76,20 +77,15 @@ function candidateForTradeEvent(
     throw new Error(`Missing closed chart candle for paper-trade snapshot ${eventSnapshotId}`);
   }
   return {
-    signalId: trade.signalId,
     snapshotId: eventSnapshotId,
     symbol: trade.symbol,
     strategy: trade.strategy,
     side: trade.side,
     signalCandle,
-    entryCandleOpenTime: trade.entryCandleOpenTime,
     entryPrice: trade.entryPrice,
     stopLoss: trade.stopPrice,
     target1: trade.target1,
     target2: trade.target2,
-    target3: "trailing_runner",
-    minimumRiskReward: 2,
-    higherTimeframeBias: "not applicable",
     chartCandles,
     chartAnnotations: { levels: [], zones: [] }
   };

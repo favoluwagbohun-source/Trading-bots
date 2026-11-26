@@ -41,18 +41,24 @@ function finitePrice(value: string, field: string): number {
 export function validateCandle(candle: Candle): Candle {
   const openTime = Number(candle.openTime);
   const closeTime = Number(candle.closeTime);
+  const volume = Number(candle.volume);
   const open = finitePrice(candle.open, "open");
   const high = finitePrice(candle.high, "high");
   const low = finitePrice(candle.low, "low");
   const close = finitePrice(candle.close, "close");
 
-  if (!Number.isSafeInteger(openTime) || !Number.isSafeInteger(closeTime) || closeTime <= openTime) {
+  if (
+    !Number.isSafeInteger(openTime) ||
+    !Number.isSafeInteger(closeTime) ||
+    openTime < 0 ||
+    closeTime <= openTime
+  ) {
     throw new Error("Invalid candle timestamps");
   }
   if (high < open || high < close || low > open || low > close || high < low) {
     throw new Error("Invalid OHLC candle");
   }
-  if (Number(candle.volume) < 0) {
+  if (!Number.isFinite(volume) || volume < 0) {
     throw new Error("Invalid candle volume");
   }
 
