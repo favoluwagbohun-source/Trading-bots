@@ -62,7 +62,7 @@ describe("Telegram photo signal publisher", () => {
     expect(sendPhoto).not.toHaveBeenCalled();
   });
 
-  it("honours per-chat pause and strategy settings and permits retry after delivery failure", async () => {
+  it("honours per-chat preferences and does not retry an event with uncertain delivery", async () => {
     const users = new TelegramUserStateStore();
     users.setAccountEquity(9, 1000);
     const sendPhoto = vi.fn()
@@ -72,7 +72,7 @@ describe("Telegram photo signal publisher", () => {
 
     await expect(publisher.publishSignal(9, signal, chart))
       .rejects.toThrow("Telegram is unavailable");
-    await expect(publisher.publishSignal(9, signal, chart)).resolves.toBe(true);
+    await expect(publisher.publishSignal(9, signal, chart)).resolves.toBe(false);
     await expect(publisher.publishSignal(9, signal, chart)).resolves.toBe(false);
 
     users.setStrategyEnabled(9, "top_down_trendline", false);
@@ -86,6 +86,6 @@ describe("Telegram photo signal publisher", () => {
       ...signal,
       signalId: "signal-3"
     }, chart)).resolves.toBe(false);
-    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(sendPhoto).toHaveBeenCalledOnce();
   });
 });

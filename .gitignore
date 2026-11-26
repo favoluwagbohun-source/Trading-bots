@@ -3,6 +3,7 @@ dist/
 coverage/
 .env
 .env.*
+data/telegram-state.json
 *.log
 .DS_Store
 

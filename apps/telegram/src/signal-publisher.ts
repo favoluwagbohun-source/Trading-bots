@@ -69,8 +69,6 @@ function signalCaption(signal: PreparedPaperSignal, equity: number): string {
 }
 
 export class TelegramSignalPublisher {
-  private readonly deliveredEvents = new Set<string>();
-
   constructor(
     private readonly api: Pick<TelegramApiClient, "sendPhoto">,
     private readonly users: TelegramUserStateStore
@@ -89,20 +87,14 @@ export class TelegramSignalPublisher {
     this.validateSignal(signal, state.accountEquity);
     assertPhotoMatchesSnapshot(signal.snapshotId, chart);
 
-    const eventKey = `${chatId}:signal:${signal.signalId}`;
-    if (this.deliveredEvents.has(eventKey)) return false;
-    this.deliveredEvents.add(eventKey);
-    try {
-      await this.api.sendPhoto(
-        chatId,
-        chart.image,
-        signalCaption(signal, state.accountEquity)
-      );
-      return true;
-    } catch (error) {
-      this.deliveredEvents.delete(eventKey);
-      throw error;
-    }
+    const eventKey = `signal:${signal.signalId}`;
+    if (!this.users.claimNotificationEvent(chatId, eventKey)) return false;
+    await this.api.sendPhoto(
+      chatId,
+      chart.image,
+      signalCaption(signal, state.accountEquity)
+    );
+    return true;
   }
 
   async publishTradeUpdate(
@@ -110,24 +102,18 @@ export class TelegramSignalPublisher {
     update: PaperTradeUpdate,
     chart: SignalChartAttachment
   ): Promise<boolean> {
-    const eventKey = `${chatId}:event:${update.eventId}`;
-    if (this.deliveredEvents.has(eventKey)) return false;
+    const eventKey = `event:${update.eventId}`;
     assertPhotoMatchesSnapshot(update.snapshotId, chart);
     if (!update.details.trim() || !update.event.trim() || !update.symbol.trim()) {
       throw new Error("Paper-trade update details are required");
     }
-    this.deliveredEvents.add(eventKey);
-    try {
-      await this.api.sendPhoto(
-        chatId,
-        chart.image,
-        `${update.symbol.toUpperCase()} — ${update.event}\n${update.details}`
-      );
-      return true;
-    } catch (error) {
-      this.deliveredEvents.delete(eventKey);
-      throw error;
-    }
+    if (!this.users.claimNotificationEvent(chatId, eventKey)) return false;
+    await this.api.sendPhoto(
+      chatId,
+      chart.image,
+      `${update.symbol.toUpperCase()} — ${update.event}\n${update.details}`
+    );
+    return true;
   }
 
   private validateSignal(signal: PreparedPaperSignal, equity: number): void {
