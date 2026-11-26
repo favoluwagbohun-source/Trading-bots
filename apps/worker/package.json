@@ -15,7 +15,6 @@
     "@crypto-signal/shared": "0.1.0",
     "@crypto-signal/strategies": "0.1.0",
     "@crypto-signal/telegram": "0.1.0",
-    "@crypto-signal/telegram": "0.1.0",
     "@resvg/resvg-js": "^2.6.2"
   },
   "devDependencies": {

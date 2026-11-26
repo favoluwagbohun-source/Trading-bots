@@ -4,10 +4,13 @@ A modular cryptocurrency market-analysis, paper-trading, backtesting, charting, 
 
 ## Current implementation
 
-Stages 1-14 are implemented. Stage 14 adds a repeatable, fixed-rule
+Stages 1-15 are implemented. Stage 14 adds a repeatable, fixed-rule
 out-of-sample validation harness; no strategy profitability has been
 established because no reviewable historical dataset has been supplied.
-Stage 15 covers production preparation. The repository provides:
+Stage 15 adds a single-host Docker Compose deployment reference. It still
+requires the operator's HTTPS edge, secret management, and persistent backup
+service before public production use. See
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 - a TypeScript monorepo and documented architecture;
 - Binance public market-data, indicators, strategies, risk, and backtesting packages;

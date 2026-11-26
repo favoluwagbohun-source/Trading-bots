@@ -69,3 +69,6 @@ probability. Grade bands are A (90+), B (80+), C (65+), and D (below 65).
 
 The system uses Binance public market data only. It does not read exchange
 account credentials and never sends real orders.
+
+For the single-worker production Compose deployment, backup guidance, and
+HTTPS edge requirements, see [`docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md).

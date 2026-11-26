@@ -1,0 +1,102 @@
+services:
+  api:
+    image: trading-bots-runtime:local
+    build:
+      context: .
+      target: runtime
+    command: ["node", "apps/api/dist/main.js"]
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3001"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env.production}
+      TELEGRAM_STATE_PATH: /app/data/telegram-state.json
+      PAPER_TRADES_PATH: /app/data/paper-trades.json
+    volumes:
+      - paper-data:/app/data:ro
+    expose:
+      - "3001"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    image: trading-bots-runtime:local
+    build:
+      context: .
+      target: runtime
+    command: ["node", "apps/worker/dist/main.js"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    environment:
+      NODE_ENV: production
+      WATCHLIST_SYMBOLS: ${WATCHLIST_SYMBOLS:?Set WATCHLIST_SYMBOLS in .env.production}
+      SCAN_INTERVAL_MS: ${SCAN_INTERVAL_MS:-30000}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env.production}
+      TELEGRAM_WEB_APP_URL: ${TELEGRAM_WEB_APP_URL:?Set TELEGRAM_WEB_APP_URL to your public HTTPS URL}
+      TELEGRAM_STATE_PATH: /app/data/telegram-state.json
+      PAPER_TRADES_PATH: /app/data/paper-trades.json
+      PAPER_FEE_RATE_PER_SIDE: ${PAPER_FEE_RATE_PER_SIDE:?Set PAPER_FEE_RATE_PER_SIDE in .env.production}
+      PAPER_SLIPPAGE_RATE_PER_SIDE: ${PAPER_SLIPPAGE_RATE_PER_SIDE:?Set PAPER_SLIPPAGE_RATE_PER_SIDE in .env.production}
+      STRATEGY_QUALITY_EVIDENCE: ${STRATEGY_QUALITY_EVIDENCE:-}
+      PAPER_MAX_OPEN_TRADES: ${PAPER_MAX_OPEN_TRADES:-3}
+      PAPER_MAX_DAILY_LOSS_PERCENT: ${PAPER_MAX_DAILY_LOSS_PERCENT:-2}
+      PAPER_MAX_WEEKLY_LOSS_PERCENT: ${PAPER_MAX_WEEKLY_LOSS_PERCENT:-6}
+      PAPER_MAX_GROSS_EXPOSURE_PERCENT: ${PAPER_MAX_GROSS_EXPOSURE_PERCENT:-100}
+      PAPER_MAX_OPEN_PER_GROUP: ${PAPER_MAX_OPEN_PER_GROUP:-1}
+    volumes:
+      - paper-data:/app/data
+    deploy:
+      replicas: 1
+
+  web:
+    image: trading-bots-web:local
+    build:
+      context: .
+      target: web
+    init: true
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    user: "101:101"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+      - /var/cache/nginx:size=32m,noexec,nosuid,nodev,uid=101,gid=101,mode=1777
+      - /var/run:size=8m,noexec,nosuid,nodev,uid=101,gid=101,mode=1777
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  paper-data:

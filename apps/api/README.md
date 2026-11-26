@@ -27,3 +27,7 @@ to `./data/telegram-state.json` and `./data/paper-trades.json`). Run the API
 and worker with access to the same files on a private shared volume. Never
 expose those files through static hosting or run multiple independent writers
 against them.
+
+For the single-host production reference deployment, see
+[`docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md). Keep the API private behind
+the web reverse proxy; do not publish its port directly.
