@@ -13,6 +13,7 @@ const BOT_COMMANDS: readonly TelegramBotCommand[] = [
   { command: "performance", description: "View recorded paper-trade results" },
   { command: "strategies", description: "View independent strategy status" },
   { command: "settings", description: "Configure per-chat strategy preferences" },
+  { command: "paper", description: "Opt in or out of automatic paper entries" },
   { command: "pause", description: "Pause signal delivery to this chat" },
   { command: "resume", description: "Resume signal delivery to this chat" }
 ];

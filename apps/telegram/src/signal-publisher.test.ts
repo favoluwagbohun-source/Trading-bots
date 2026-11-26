@@ -15,6 +15,7 @@ const signal: PreparedPaperSignal = {
   target2: 130,
   target3: "trailing_runner",
   quantity: 0.1,
+  accountEquity: 1000,
   estimatedMaximumLoss: 9.5,
   minimumRiskReward: 3,
   qualityScore: 82,

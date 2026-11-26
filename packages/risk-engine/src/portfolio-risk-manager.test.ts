@@ -82,6 +82,40 @@ describe("portfolio risk manager", () => {
     })).toThrow("weekly loss");
   });
 
+  it("restores closed trade PnL and daily/weekly loss limits after a restart", () => {
+    const first = trade("signal-1", "BTCUSDT");
+    const manager = new PortfolioRiskManager(1000, limits);
+    manager.openTrade(first);
+    manager.closeTrade("signal-1", -15, first.openedAt);
+
+    const restarted = new PortfolioRiskManager(1000, limits);
+    restarted.restoreClosedTrade("signal-1", -15, first.openedAt);
+
+    expect(restarted.getSnapshot(first.openedAt)).toMatchObject({
+      equity: 985,
+      dailyRealizedLoss: 15,
+      weeklyRealizedLoss: 15,
+      openTrades: []
+    });
+    expect(() => restarted.openTrade(trade("signal-2", "ETHUSDT")))
+      .toThrow("daily loss");
+  });
+
+  it("restores and updates PnL already realized on an active partial trade", () => {
+    const first = trade("signal-1", "BTCUSDT");
+    const manager = new PortfolioRiskManager(1000, limits);
+    manager.restoreOpenTrade({ ...first, realizedPnl: 5 }, first.openedAt);
+    expect(manager.getSnapshot(first.openedAt).equity).toBe(1005);
+
+    manager.updateOpenTradeRealizedPnl("signal-1", 8, first.openedAt);
+    manager.closeTrade("signal-1", 2, first.openedAt);
+
+    expect(manager.getSnapshot(first.openedAt)).toMatchObject({
+      equity: 1010,
+      openTrades: []
+    });
+  });
+
   it("enforces the open-trade count limit", () => {
     const manager = new PortfolioRiskManager(1000, {
     ...limits,

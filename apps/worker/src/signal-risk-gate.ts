@@ -10,6 +10,7 @@ import type { SignalCandidate } from "./signal-scanner.js";
 
 export interface RiskApprovedCandidate {
   readonly candidate: SignalCandidate;
+  readonly equity: number;
   readonly sizing: PositionSizingResult;
   readonly portfolioTrade: OpenPaperTrade;
 }
@@ -46,10 +47,10 @@ export class SignalRiskGate {
       openedAt: candidate.entryCandleOpenTime
     };
     this.options.portfolio.assertCanOpenTrade(portfolioTrade);
-    return { candidate, sizing, portfolioTrade };
+    return { candidate, equity: snapshot.equity, sizing, portfolioTrade };
   }
 
-  confirmPublished(approval: RiskApprovedCandidate): void {
+  confirmOpened(approval: RiskApprovedCandidate): void {
     this.options.portfolio.openTrade(approval.portfolioTrade);
   }
 }

@@ -33,6 +33,7 @@ function candle(
 function openInput(entryCandleOpenTime = 600_000) {
   return {
     signalId: "signal-1",
+    snapshotId: "BTCUSDT:5m:300000",
     chatId: 7,
     symbol: "btcusdt",
     strategy: "break_and_retest" as const,
@@ -42,6 +43,12 @@ function openInput(entryCandleOpenTime = 600_000) {
     target1: 115,
     target2: 130,
     quantity: 1,
+    notional: 100,
+    plannedRisk: 10,
+    correlationGroup: "crypto",
+    contractMultiplier: 1,
+    feeRatePerSide: 0,
+    slippageRatePerSide: 0,
     entryCandleOpenTime,
     trailingSwingLeftBars: 1,
     trailingSwingRightBars: 1
@@ -78,7 +85,8 @@ describe("PaperTradeLedger", () => {
       target1Reached: true,
       target2Reached: true,
       remainingQuantity: expect.closeTo(1 / 3),
-      stopPrice: 104
+      stopPrice: 104,
+      realizedPnl: 15
     });
 
     const restarted = new PaperTradeLedger({ filePath });
@@ -91,6 +99,7 @@ describe("PaperTradeLedger", () => {
       "trade_closed"
     ]);
     expect(restarted.getActiveTrades()).toEqual([]);
+    expect(restarted.getTrade(7, "signal-1")?.realizedPnl).toBeGreaterThan(0);
     expect(restarted.processClosedCandles("BTCUSDT", [exitCandle])).toEqual([]);
 
     const tp1Event = restarted.getEvents().find(({ type }) => type === "tp1_reached")!;
@@ -112,6 +121,7 @@ describe("PaperTradeLedger", () => {
       "stop_loss_reached",
       "trade_closed"
     ]);
+    expect(ledger.getTrade(7, "signal-1")?.realizedPnl).toBe(-10);
     expect(ledger.getEvents().some(({ type }) => type === "tp1_reached")).toBe(false);
   });
 

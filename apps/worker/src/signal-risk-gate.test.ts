@@ -72,7 +72,7 @@ describe("SignalRiskGate", () => {
     expect(approval.sizing.netRiskReward).toBeGreaterThanOrEqual(2);
     expect(portfolio.getSnapshot(2_099_999).openTrades).toEqual([]);
 
-    gate.confirmPublished(approval);
+    gate.confirmOpened(approval);
     expect(portfolio.getSnapshot(2_099_999).openTrades).toHaveLength(1);
     expect(() => gate.approve(candidate("signal-2"), instrument))
       .toThrow(PortfolioRiskError);
@@ -86,7 +86,7 @@ describe("SignalRiskGate", () => {
       correlationGroupForSymbol: () => "stablecoin-quoted"
     });
     const first = gate.approve(candidate("signal-1"), instrument);
-    gate.confirmPublished(first);
+    gate.confirmOpened(first);
 
     expect(() => gate.approve(
       candidate("signal-2", "ETHUSDT", 2000),

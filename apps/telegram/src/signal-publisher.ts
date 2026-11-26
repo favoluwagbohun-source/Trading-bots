@@ -22,6 +22,7 @@ export interface PreparedPaperSignal {
   readonly target2: number;
   readonly target3: "trailing_runner";
   readonly quantity: number;
+  readonly accountEquity: number;
   readonly estimatedMaximumLoss: number;
   readonly minimumRiskReward: number;
   readonly qualityScore: number;
@@ -46,7 +47,7 @@ function assertPhotoMatchesSnapshot(
   if (chart.image.size === 0) throw new Error("A chart image is required for every signal");
 }
 
-function signalCaption(signal: PreparedPaperSignal, equity: number): string {
+function signalCaption(signal: PreparedPaperSignal): string {
   const entryRisk = Math.abs(signal.entryPrice - signal.stopLoss);
   const reward = Math.abs(signal.target2 - signal.entryPrice);
   const geometricRiskReward = reward / entryRisk;
@@ -60,7 +61,7 @@ function signalCaption(signal: PreparedPaperSignal, equity: number): string {
     `TP1: ${signal.target1}.`,
     `TP2: ${signal.target2}.`,
     "TP3: Trailing runner.",
-    `Risk budget: 1% of simulated equity (${equity * 0.01}); estimated maximum loss: ${signal.estimatedMaximumLoss}.`,
+    `Risk budget: 1% of simulated equity (${signal.accountEquity * 0.01}); estimated maximum loss: ${signal.estimatedMaximumLoss}.`,
     `Position size: ${signal.quantity}.`,
     `Risk/Reward: at least 1:2 (TP2 ${geometricRiskReward.toFixed(2)}R).`,
     `Signal quality: ${signal.qualityScore}/100 · Grade ${signal.strategyGrade} (not a win probability).`,
@@ -84,7 +85,7 @@ export class TelegramSignalPublisher {
       throw new Error("Set a simulated account before receiving paper signals");
     }
     if (state.paused || !state.enabledStrategies.includes(signal.strategy)) return false;
-    this.validateSignal(signal, state.accountEquity);
+    this.validateSignal(signal);
     assertPhotoMatchesSnapshot(signal.snapshotId, chart);
 
     const eventKey = `signal:${signal.signalId}`;
@@ -92,7 +93,7 @@ export class TelegramSignalPublisher {
     await this.api.sendPhoto(
       chatId,
       chart.image,
-      signalCaption(signal, state.accountEquity)
+      signalCaption(signal)
     );
     return true;
   }
@@ -116,13 +117,14 @@ export class TelegramSignalPublisher {
     return true;
   }
 
-  private validateSignal(signal: PreparedPaperSignal, equity: number): void {
+  private validateSignal(signal: PreparedPaperSignal): void {
     const prices = [
       signal.entryPrice,
       signal.stopLoss,
       signal.target1,
       signal.target2,
       signal.quantity,
+      signal.accountEquity,
       signal.estimatedMaximumLoss,
       signal.minimumRiskReward,
       signal.qualityScore
@@ -132,11 +134,11 @@ export class TelegramSignalPublisher {
       !/^[A-Z0-9]{6,20}$/.test(signal.symbol) ||
       !signal.higherTimeframeBias.trim() ||
       !prices.every(Number.isFinite) ||
-      prices.slice(0, 6).some((value) => value <= 0) ||
+      prices.slice(0, 7).some((value) => value <= 0) ||
       signal.qualityScore < 0 ||
       signal.qualityScore > 100 ||
       signal.minimumRiskReward < 2 ||
-      signal.estimatedMaximumLoss > equity * 0.01 + 1e-8 ||
+      signal.estimatedMaximumLoss > signal.accountEquity * 0.01 + 1e-8 ||
       !["A", "B"].includes(signal.strategyGrade)
     ) {
       throw new Error("Paper signal failed quality, risk, or position validation");

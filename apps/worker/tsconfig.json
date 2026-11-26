@@ -12,6 +12,8 @@
     { "path": "../../packages/market-data" },
     { "path": "../../packages/risk-engine" },
     { "path": "../../packages/shared" },
-    { "path": "../../packages/strategies" }
+    { "path": "../../packages/strategies" },
+    { "path": "../telegram" },
+    { "path": "../telegram" }
   ]
 }

@@ -53,7 +53,44 @@ describe("Telegram chat commands", () => {
     expect(commands.states.isStrategyEnabled(1, "break_and_retest")).toBe(false);
     expect(commands.states.isStrategyEnabled(2, "break_and_retest")).toBe(true);
     expect(sendMessage.mock.calls.at(-2)?.[1]).toContain("delivery is paused");
-    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("scanner");
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("No active paper signals");
+  });
+
+  it("requires a balance before opting in and respects explicit paper on/off choices", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const commands = new TelegramCommandService({ sendMessage });
+
+    await commands.handleMessage({ chat: { id: 8 }, text: "/paper on" });
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Set your simulated account balance");
+    expect(commands.states.get(8).paperTradingEnabled).toBe(false);
+
+    await commands.handleMessage({ chat: { id: 8 }, text: "/account 2500" });
+    await commands.handleMessage({ chat: { id: 8 }, text: "/paper on" });
+    expect(commands.states.get(8).paperTradingEnabled).toBe(true);
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("turned on");
+
+    await commands.handleMessage({ chat: { id: 8 }, text: "/paper off" });
+    expect(commands.states.get(8).paperTradingEnabled).toBe(false);
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Existing paper trades will continue");
+  });
+
+  it("reports recorded simulated performance without estimating unobserved results", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const commands = new TelegramCommandService({ sendMessage }, {
+      getPaperPerformance: () => ({
+        currentEquity: 1015,
+        completedTrades: 4,
+        activeTrades: 1,
+        realizedPnl: 15,
+        winRatePercent: 50
+      })
+    });
+    await commands.handleMessage({ chat: { id: 8 }, text: "/account 1000" });
+    await commands.handleMessage({ chat: { id: 8 }, text: "/performance" });
+
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Completed trades: 4");
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Realized PnL: $15.00");
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Win rate: 50.0%");
   });
 
   it("rejects insecure Telegram Mini App URLs", () => {

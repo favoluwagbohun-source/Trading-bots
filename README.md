@@ -4,12 +4,13 @@ A modular cryptocurrency market-analysis, paper-trading, backtesting, charting, 
 
 ## Current implementation
 
-Stages 1-10 are implemented. The repository provides:
+Stages 1-12 are implemented. Stage 13 (the performance dashboard) is next. The repository provides:
 
 - a TypeScript monorepo and documented architecture;
 - Binance public market-data, indicators, strategies, risk, and backtesting packages;
 - historical candle replay and manual paper trading;
 - a React/Vite dark chart and Fastify market-data API;
+- a Telegram signal bot with opt-in automated paper entries and durable trade tracking;
 - a stage checklist and package-level tests.
 
 Production exchange orders are intentionally out of scope. The system will support Binance public market data and simulated paper trades only.

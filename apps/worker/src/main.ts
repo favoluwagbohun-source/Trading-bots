@@ -1,7 +1,15 @@
 import { BinanceRestClient } from "@crypto-signal/market-data";
+import {
+  TelegramApiClient,
+  TelegramCommandService,
+  TelegramPollingBot,
+  TelegramUserStateStore
+} from "@crypto-signal/telegram";
+import type { PortfolioLimits, TradingCosts } from "@crypto-signal/risk-engine";
+import { ApprovedPaperSignalCoordinator } from "./approved-paper-signal-coordinator.js";
 import { PaperTradeLedger } from "./paper-trade-ledger.js";
-import { scoreSignalQuality } from "./signal-quality.js";
-import { SignalScanner } from "./signal-scanner.js";
+import { scoreSignalQuality, type SignalGrade, type StrategyQualityEvidence } from "./signal-quality.js";
+import { SignalScanner, type SignalCandidate } from "./signal-scanner.js";
 
 function parseWatchlist(value: string | undefined): string[] {
   if (!value) throw new Error("Set WATCHLIST_SYMBOLS to a comma-separated Binance symbol list");
@@ -17,23 +25,171 @@ function parseScanInterval(value: string | undefined): number {
   return interval;
 }
 
+function configuredNumber(name: string, defaultValue: number): number {
+  const value = process.env[name];
+  if (value === undefined) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive finite number`);
+  }
+  return parsed;
+}
+
+function configuredInteger(name: string, defaultValue: number): number {
+  const parsed = configuredNumber(name, defaultValue);
+  if (!Number.isInteger(parsed)) throw new Error(`${name} must be a positive integer`);
+  return parsed;
+}
+
+function requiredRate(name: string): number {
+  const value = process.env[name];
+  const parsed = value === undefined ? NaN : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed >= 1) {
+    throw new Error(`${name} must be configured as a rate from 0 inclusive to 1 exclusive`);
+  }
+  return parsed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStrategyId(value: string): value is SignalCandidate["strategy"] {
+  return [
+    "top_down_trendline",
+    "break_and_retest",
+    "liquidity_sweep_reversal",
+    "order_block_retest"
+  ].includes(value);
+}
+
+function isSignalGrade(value: unknown): value is SignalGrade {
+  return value === "A" || value === "B" || value === "C" || value === "D";
+}
+
+function parseQualityEvidence(
+  value: string | undefined
+): Partial<Record<SignalCandidate["strategy"], StrategyQualityEvidence>> {
+  if (!value) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`STRATEGY_QUALITY_EVIDENCE must be valid JSON: ${String(error)}`);
+  }
+  if (!isRecord(parsed)) {
+    throw new Error("STRATEGY_QUALITY_EVIDENCE must be an object keyed by strategy ID");
+  }
+  const result: Partial<Record<SignalCandidate["strategy"], StrategyQualityEvidence>> = {};
+  for (const [strategy, evidence] of Object.entries(parsed)) {
+    if (!isStrategyId(strategy)) {
+      throw new Error(`Unknown strategy in STRATEGY_QUALITY_EVIDENCE: ${strategy}`);
+    }
+    if (!isRecord(evidence)) {
+      throw new Error(`Malformed quality evidence for ${strategy}`);
+    }
+    if (
+      !isSignalGrade(evidence.maximumSupportedGrade) ||
+      typeof evidence.source !== "string" ||
+      !evidence.source.trim()
+    ) {
+      throw new Error(`Malformed quality evidence for ${strategy}`);
+    }
+    result[strategy] = {
+      maximumSupportedGrade: evidence.maximumSupportedGrade,
+      source: evidence.source
+    };
+  }
+  return result;
+}
+
 const controller = new AbortController();
+const watchlist = parseWatchlist(process.env.WATCHLIST_SYMBOLS);
+const scanIntervalMs = parseScanInterval(process.env.SCAN_INTERVAL_MS);
+const marketData = new BinanceRestClient();
 const tradeLedger = new PaperTradeLedger({
   filePath: process.env.PAPER_TRADES_PATH?.trim() || "./data/paper-trades.json"
 });
+const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+const statePath = process.env.TELEGRAM_STATE_PATH?.trim() || "./data/telegram-state.json";
+const states = token ? new TelegramUserStateStore({ filePath: statePath }) : undefined;
+const api = token ? new TelegramApiClient(token) : undefined;
+const qualityEvidence = parseQualityEvidence(process.env.STRATEGY_QUALITY_EVIDENCE);
+const portfolioLimits: PortfolioLimits = {
+  maximumOpenTrades: configuredInteger("PAPER_MAX_OPEN_TRADES", 3),
+  maximumDailyLossPercent: configuredNumber("PAPER_MAX_DAILY_LOSS_PERCENT", 2),
+  maximumWeeklyLossPercent: configuredNumber("PAPER_MAX_WEEKLY_LOSS_PERCENT", 6),
+  maximumGrossExposurePercent: configuredNumber("PAPER_MAX_GROSS_EXPOSURE_PERCENT", 100),
+  maximumOpenTradesPerCorrelationGroup: configuredInteger("PAPER_MAX_OPEN_PER_GROUP", 1)
+};
+let coordinator: ApprovedPaperSignalCoordinator | undefined;
+let bot: TelegramPollingBot | undefined;
+
+if (states && api) {
+  const costs: TradingCosts = {
+    feeRatePerSide: requiredRate("PAPER_FEE_RATE_PER_SIDE"),
+    slippageRatePerSide: requiredRate("PAPER_SLIPPAGE_RATE_PER_SIDE")
+  };
+  coordinator = new ApprovedPaperSignalCoordinator({
+    api,
+    users: states,
+    ledger: tradeLedger,
+    marketData,
+    costs,
+    limits: portfolioLimits,
+    evidence: qualityEvidence,
+    correlationGroupForSymbol: () => "crypto",
+    onRejected: (chatId, candidate, reason) => {
+      const owner = chatId === undefined ? "all opted-in users" : `chat ${chatId}`;
+      console.info(`Paper entry rejected for ${owner}: ${candidate.signalId}: ${reason}.`);
+    }
+  });
+  const commands = new TelegramCommandService(api, {
+    ...(process.env.TELEGRAM_WEB_APP_URL === undefined
+      ? {}
+      : { webAppUrl: process.env.TELEGRAM_WEB_APP_URL }),
+    states,
+    hasPaperTradeHistory: (chatId) => coordinator!.hasTradeHistory(chatId),
+    getPaperEquity: (chatId, startingEquity) =>
+      coordinator!.getEquity(chatId, startingEquity),
+    getActivePaperTrades: (chatId) => coordinator!.getActiveTrades(chatId),
+    getPaperPerformance: (chatId, startingEquity) =>
+      coordinator!.getPerformance(chatId, startingEquity)
+  });
+  bot = new TelegramPollingBot(api, commands, {
+    ...(process.env.TELEGRAM_WEB_APP_URL === undefined
+      ? {}
+      : { webAppUrl: process.env.TELEGRAM_WEB_APP_URL }),
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const safeMessage = token ? message.split(token).join("[REDACTED]") : message;
+      console.error("Telegram polling error:", safeMessage);
+    }
+  });
+} else {
+  console.info("Telegram is not configured; scanner candidates will only be logged.");
+}
+if (Object.keys(qualityEvidence).length === 0) {
+  console.warn("No strategy validation evidence configured; automatic paper entries will be quality-gated.");
+}
+
 const scanner = new SignalScanner({
-  symbols: parseWatchlist(process.env.WATCHLIST_SYMBOLS),
-  client: new BinanceRestClient(),
-  scanIntervalMs: parseScanInterval(process.env.SCAN_INTERVAL_MS),
-  onCandidate: (candidate) => {
-    const quality = scoreSignalQuality(candidate);
+  symbols: watchlist,
+  client: marketData,
+  scanIntervalMs,
+  onCandidate: async (candidate) => {
+    const quality = scoreSignalQuality(candidate, qualityEvidence[candidate.strategy]);
     console.info(
       `Candidate detected: ${candidate.symbol} ${candidate.strategy} ${candidate.side} at ${candidate.signalCandle.closeTime}; setup score ${quality.score}/100, grade ${quality.strategyGrade}; Telegram eligible: ${quality.publishEligible}.`
     );
+    if (coordinator) await coordinator.processCandidate(candidate);
   },
-  onCandles: (symbol, candles) => {
-    const events = tradeLedger.processClosedCandles(symbol, candles);
-    for (const event of events) {
+  onCandles: async (symbol, candles) => {
+    if (coordinator) {
+      await coordinator.processClosedCandles(symbol, candles);
+      return;
+    }
+    for (const event of tradeLedger.processClosedCandles(symbol, candles)) {
       console.info(
         `Paper-trade event pending: ${event.symbol} ${event.type} for signal ${event.signalId}.`
       );
@@ -45,6 +201,15 @@ const scanner = new SignalScanner({
   }
 });
 
-process.once("SIGINT", () => controller.abort());
-process.once("SIGTERM", () => controller.abort());
-await scanner.run(controller.signal);
+process.once("SIGINT", () => {
+  controller.abort();
+  bot?.stop();
+});
+process.once("SIGTERM", () => {
+  controller.abort();
+  bot?.stop();
+});
+
+const tasks: Promise<void>[] = [scanner.run(controller.signal)];
+if (bot) tasks.push(bot.run());
+await Promise.all(tasks);

@@ -23,6 +23,7 @@ export type ManagedTradeStatus = "active" | "closed";
 
 export interface OpenPaperTradeInput {
   readonly signalId: string;
+  readonly snapshotId: string;
   readonly chatId: number;
   readonly symbol: string;
   readonly strategy: StrategyId;
@@ -32,6 +33,12 @@ export interface OpenPaperTradeInput {
   readonly target1: number;
   readonly target2: number;
   readonly quantity: number;
+  readonly notional: number;
+  readonly plannedRisk: number;
+  readonly correlationGroup: string;
+  readonly contractMultiplier: number;
+  readonly feeRatePerSide: number;
+  readonly slippageRatePerSide: number;
   readonly entryCandleOpenTime: number;
   readonly target1Allocation?: number;
   readonly target2Allocation?: number;
@@ -53,6 +60,13 @@ export interface ManagedPaperTrade {
   readonly target2: number;
   readonly quantity: number;
   readonly remainingQuantity: number;
+  readonly notional: number;
+  readonly plannedRisk: number;
+  readonly correlationGroup: string;
+  readonly contractMultiplier: number;
+  readonly feeRatePerSide: number;
+  readonly slippageRatePerSide: number;
+  readonly realizedPnl: number;
   readonly entryCandleOpenTime: number;
   readonly target1Allocation: number;
   readonly target2Allocation: number;
@@ -90,7 +104,7 @@ export interface InvalidatePaperSetupInput {
 }
 
 interface PersistedTradeLedger {
-  readonly version: 1;
+  readonly version: 2;
   readonly trades: readonly ManagedPaperTrade[];
   readonly events: readonly PaperTradeEvent[];
   readonly lastProcessedOpenTimeBySymbol: Readonly<Record<string, number>>;
@@ -137,6 +151,16 @@ function isManagedTrade(value: unknown): value is ManagedPaperTrade {
     positive(value.target1) &&
     positive(value.target2) &&
     positive(value.quantity) &&
+    positive(value.notional) &&
+    positive(value.plannedRisk) &&
+    typeof value.correlationGroup === "string" &&
+    value.correlationGroup.trim().length > 0 &&
+    positive(value.contractMultiplier) &&
+    finite(value.feeRatePerSide) &&
+    value.feeRatePerSide >= 0 &&
+    finite(value.slippageRatePerSide) &&
+    value.slippageRatePerSide >= 0 &&
+    finite(value.realizedPnl) &&
     finite(value.remainingQuantity) &&
     value.remainingQuantity >= 0 &&
     finite(value.entryCandleOpenTime) &&
@@ -149,6 +173,40 @@ function isManagedTrade(value: unknown): value is ManagedPaperTrade {
     Number.isInteger(value.trailingSwingRightBars) &&
     finite(value.trailingStopBufferPercent) &&
     (value.status === "active" || value.status === "closed");
+}
+
+function upgradeManagedTrade(
+  value: unknown,
+  hasLegacyStopEvent: boolean
+): ManagedPaperTrade | undefined {
+  if (!isRecord(value)) return undefined;
+  const quantity = value.quantity;
+  const entryPrice = value.entryPrice;
+  const initialStopLoss = value.initialStopLoss;
+  const plannedRisk = positive(value.plannedRisk)
+    ? value.plannedRisk
+    : positive(quantity) && positive(entryPrice) && positive(initialStopLoss)
+      ? quantity * Math.abs(entryPrice - initialStopLoss)
+      : undefined;
+  const upgraded = {
+    ...value,
+    notional: positive(value.notional)
+      ? value.notional
+      : positive(quantity) && positive(entryPrice) ? quantity * entryPrice : undefined,
+    plannedRisk,
+    correlationGroup: typeof value.correlationGroup === "string"
+      ? value.correlationGroup
+      : "legacy",
+    contractMultiplier: positive(value.contractMultiplier) ? value.contractMultiplier : 1,
+    feeRatePerSide: finite(value.feeRatePerSide) ? value.feeRatePerSide : 0,
+    slippageRatePerSide: finite(value.slippageRatePerSide) ? value.slippageRatePerSide : 0,
+    realizedPnl: finite(value.realizedPnl)
+      ? value.realizedPnl
+      : value.status === "closed" && hasLegacyStopEvent && plannedRisk !== undefined
+        ? -plannedRisk
+        : 0
+  };
+  return isManagedTrade(upgraded) ? upgraded : undefined;
 }
 
 function isPaperTradeEvent(value: unknown): value is PaperTradeEvent {
@@ -216,9 +274,25 @@ export class PaperTradeLedger {
     if (!input.signalId.trim() || !Number.isSafeInteger(input.chatId)) {
       throw new Error("Paper trade requires a signal ID and valid Telegram chat ID");
     }
+    const snapshotParts = input.snapshotId.split(":");
+    if (
+      snapshotParts[0] !== symbol ||
+      snapshotParts[1] !== "5m" ||
+      !Number.isSafeInteger(Number(snapshotParts[2])) ||
+      !input.correlationGroup.trim()
+    ) {
+      throw new Error("Paper trade requires a valid 5-minute snapshot ID and correlation group");
+    }
     if (
       ![input.entryPrice, input.stopLoss, input.target1, input.target2, input.quantity]
         .every((value) => Number.isFinite(value) && value > 0) ||
+      ![input.notional, input.plannedRisk, input.contractMultiplier]
+        .every((value) => Number.isFinite(value) && value > 0) ||
+      !Number.isFinite(input.feeRatePerSide) ||
+      input.feeRatePerSide < 0 ||
+      !Number.isFinite(input.slippageRatePerSide) ||
+      input.slippageRatePerSide < 0 ||
+      input.slippageRatePerSide >= 1 ||
       !Number.isFinite(input.entryCandleOpenTime)
     ) {
       throw new Error("Paper-trade prices, quantity, and entry time must be valid");
@@ -291,6 +365,13 @@ export class PaperTradeLedger {
       target2: input.target2,
       quantity: input.quantity,
       remainingQuantity: input.quantity,
+      notional: input.notional,
+      plannedRisk: input.plannedRisk,
+      correlationGroup: input.correlationGroup,
+      contractMultiplier: input.contractMultiplier,
+      feeRatePerSide: input.feeRatePerSide,
+      slippageRatePerSide: input.slippageRatePerSide,
+      realizedPnl: 0,
       entryCandleOpenTime: input.entryCandleOpenTime,
       target1Allocation,
       target2Allocation,
@@ -312,7 +393,7 @@ export class PaperTradeLedger {
         symbol,
         type: "signal_opened",
         occurredAt: input.entryCandleOpenTime,
-        snapshotId: `${symbol}:5m:${input.entryCandleOpenTime}`,
+        snapshotId: input.snapshotId,
         price: input.entryPrice,
         details: `${symbol} ${input.side.toUpperCase()} paper trade opened.`,
         deliveryStatus: "pending"
@@ -402,6 +483,17 @@ export class PaperTradeLedger {
         trade.status === "active" && (chatId === undefined || trade.chatId === chatId)
       )
       .map((trade) => Object.freeze({ ...trade }));
+  }
+
+  getTrades(chatId?: number): readonly ManagedPaperTrade[] {
+    return [...this.trades.values()]
+      .filter((trade) => chatId === undefined || trade.chatId === chatId)
+      .map((trade) => Object.freeze({ ...trade }));
+  }
+
+  getTrade(chatId: number, signalId: string): ManagedPaperTrade | undefined {
+    const trade = this.trades.get(this.tradeKey(chatId, signalId));
+    return trade ? Object.freeze({ ...trade }) : undefined;
   }
 
   getEvents(options: {
@@ -501,7 +593,13 @@ export class PaperTradeLedger {
       ? high >= trade.target1
       : low <= trade.target1;
     if (target1Hit && !trade.target1Reached) {
-      updated = { ...updated, target1Reached: true };
+      const quantity = trade.quantity * trade.target1Allocation;
+      updated = {
+        ...updated,
+        target1Reached: true,
+        realizedPnl: updated.realizedPnl +
+          this.realizedPnlAtExit(trade, trade.target1, quantity)
+      };
       this.addCandleEvent(
         updated,
         candle,
@@ -515,7 +613,13 @@ export class PaperTradeLedger {
       ? high >= trade.target2
       : low <= trade.target2;
     if (target2Hit && !trade.target2Reached) {
-      updated = { ...updated, target2Reached: true };
+      const quantity = trade.quantity * trade.target2Allocation;
+      updated = {
+        ...updated,
+        target2Reached: true,
+        realizedPnl: updated.realizedPnl +
+          this.realizedPnlAtExit(trade, trade.target2, quantity)
+      };
       this.addCandleEvent(
         updated,
         candle,
@@ -583,6 +687,8 @@ export class PaperTradeLedger {
   ): void {
     this.trades.set(tradeKey, {
       ...trade,
+      realizedPnl: trade.realizedPnl +
+        this.realizedPnlAtExit(trade, exitPrice, trade.remainingQuantity),
       remainingQuantity: 0,
       status: "closed",
       closedAt: candle.closeTime,
@@ -595,6 +701,28 @@ export class PaperTradeLedger {
       exitPrice,
       `Paper trade closed: ${reason}.`
     );
+  }
+
+  private realizedPnlAtExit(
+    trade: ManagedPaperTrade,
+    exitPrice: number,
+    quantity: number
+  ): number {
+    if (quantity <= 0) return 0;
+    const direction = trade.side === "buy" ? 1 : -1;
+    const entryExecution = trade.entryPrice *
+      (trade.side === "buy"
+        ? 1 + trade.slippageRatePerSide
+        : 1 - trade.slippageRatePerSide);
+    const exitExecution = exitPrice *
+      (trade.side === "buy"
+        ? 1 - trade.slippageRatePerSide
+        : 1 + trade.slippageRatePerSide);
+    const gross = (exitExecution - entryExecution) * direction *
+      quantity * trade.contractMultiplier;
+    const fees = (entryExecution + exitExecution) *
+      quantity * trade.contractMultiplier * trade.feeRatePerSide;
+    return gross - fees;
   }
 
   private addCandleEvent(
@@ -675,9 +803,8 @@ export class PaperTradeLedger {
     }
     if (
       !isRecord(value) ||
-      value.version !== 1 ||
+      (value.version !== 1 && value.version !== 2) ||
       !Array.isArray(value.trades) ||
-      !value.trades.every(isManagedTrade) ||
       !Array.isArray(value.events) ||
       !value.events.every(isPaperTradeEvent) ||
       !isRecord(value.lastProcessedOpenTimeBySymbol) ||
@@ -687,7 +814,18 @@ export class PaperTradeLedger {
       throw new Error("Paper-trade ledger has an unsupported or malformed schema");
     }
 
-    for (const trade of value.trades) {
+    if (!value.events.every(isPaperTradeEvent)) {
+      throw new Error("Paper-trade ledger has an unsupported or malformed schema");
+    }
+    const stoppedTrades = new Set(value.events
+      .filter((event) => event.type === "stop_loss_reached")
+      .map((event) => `${event.chatId}:${event.signalId}`));
+    for (const rawTrade of value.trades) {
+      const rawKey = isRecord(rawTrade)
+        ? `${String(rawTrade.chatId)}:${String(rawTrade.signalId)}`
+        : "";
+      const trade = upgradeManagedTrade(rawTrade, stoppedTrades.has(rawKey));
+      if (!trade) throw new Error("Paper-trade ledger contains an invalid trade record");
       const key = this.tradeKey(trade.chatId, trade.signalId);
       if (this.trades.has(key)) throw new Error(`Duplicate trade record in ledger: ${key}`);
       this.trades.set(key, trade);
@@ -711,7 +849,7 @@ export class PaperTradeLedger {
     const directory = dirname(this.options.filePath);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const snapshot: PersistedTradeLedger = {
-      version: 1,
+      version: 2,
       trades: [...this.trades.values()],
       events: [...this.events.values()],
       lastProcessedOpenTimeBySymbol: Object.fromEntries(this.lastProcessedOpenTimeBySymbol),

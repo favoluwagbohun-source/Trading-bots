@@ -77,4 +77,15 @@ describe("position sizing", () => {
       costs: { feeRatePerSide: 0.01, slippageRatePerSide: 0.001 }
     })).toThrow(PositionSizingError);
   });
+
+  it("caps the risk-sized quantity at an exchange maximum notional", () => {
+    const result = calculatePositionSize({
+      ...request,
+      instrument: { ...request.instrument, maximumNotional: 100 }
+    });
+
+    expect(result.notional).toBeLessThanOrEqual(100);
+    expect(result.quantity).toBeLessThan(1);
+    expect(result.estimatedMaximumLoss).toBeLessThanOrEqual(result.riskBudget);
+  });
 });

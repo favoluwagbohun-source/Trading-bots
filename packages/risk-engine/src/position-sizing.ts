@@ -6,6 +6,7 @@ export interface InstrumentRules {
   readonly minimumQuantity: number;
   readonly maximumQuantity: number;
   readonly minimumNotional: number;
+  readonly maximumNotional?: number;
   readonly contractMultiplier: number;
 }
 
@@ -75,6 +76,13 @@ export function calculatePositionSize(
     throw new PositionSizingError("minimumNotional must be a non-negative finite number");
   }
   if (
+    request.instrument.maximumNotional !== undefined &&
+    (!Number.isFinite(request.instrument.maximumNotional) ||
+      request.instrument.maximumNotional <= 0)
+  ) {
+    throw new PositionSizingError("maximumNotional must be a positive finite number");
+  }
+  if (
     !Number.isFinite(request.costs.feeRatePerSide) ||
     request.costs.feeRatePerSide < 0 ||
     !Number.isFinite(request.costs.slippageRatePerSide) ||
@@ -125,6 +133,13 @@ export function calculatePositionSize(
       request.instrument.maximumQuantity,
       request.instrument.quantityStep
     );
+  }
+  if (request.instrument.maximumNotional !== undefined) {
+    const quantityByNotional = roundDownToStep(
+      request.instrument.maximumNotional / (entryExecutionPrice * multiplier),
+      request.instrument.quantityStep
+    );
+    quantity = Math.min(quantity, quantityByNotional);
   }
 
   let estimatedMaximumLoss = quantity * estimatedLossPerUnit;

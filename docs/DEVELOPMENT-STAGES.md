@@ -10,8 +10,8 @@
 - [x] Stage 8: historical backtesting
 - [x] Stage 9: replay and manual paper trading
 - [x] Stage 10: chart application
-- [ ] Stage 11: Telegram integration
-- [ ] Stage 12: chart-image generation
+- [x] Stage 11: Telegram integration
+- [x] Stage 12: chart-image generation
 - [ ] Stage 13: performance dashboard
 - [ ] Stage 14: professional validation
 - [ ] Stage 15: production preparation and deployment

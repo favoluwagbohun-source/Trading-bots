@@ -13,6 +13,7 @@ export interface OpenPaperTrade {
   readonly notional: number;
   readonly plannedRisk: number;
   readonly openedAt: number;
+  readonly realizedPnl?: number;
 }
 
 export interface PortfolioSnapshot {
@@ -79,9 +80,58 @@ export class PortfolioRiskManager {
 
   openTrade(trade: OpenPaperTrade): void {
     this.assertCanOpenTrade(trade);
-    const normalized = { ...trade, symbol: trade.symbol.trim().toUpperCase() };
+    const normalized = {
+      ...trade,
+      symbol: trade.symbol.trim().toUpperCase(),
+      realizedPnl: trade.realizedPnl ?? 0
+    };
     this.openTrades.set(trade.signalId, normalized);
     this.processedSignalIds.add(trade.signalId);
+  }
+
+  restoreOpenTrade(trade: OpenPaperTrade, realizedAt = trade.openedAt): void {
+    this.validateTrade(trade);
+    if (this.processedSignalIds.has(trade.signalId) || this.openTrades.has(trade.signalId)) {
+      throw new PortfolioRiskError("Restored trade has already been processed");
+    }
+    if (!Number.isFinite(new Date(realizedAt).getTime())) {
+      throw new PortfolioRiskError("Restored realization time must be valid");
+    }
+    const realizedPnl = trade.realizedPnl ?? 0;
+    const updatedEquity = this.equity + realizedPnl;
+    if (updatedEquity <= 0) {
+      throw new PortfolioRiskError("Restored losses exhausted account equity");
+    }
+    this.equity = updatedEquity;
+    this.recordRealizedLoss(realizedPnl, realizedAt);
+    this.openTrades.set(trade.signalId, {
+      ...trade,
+      symbol: trade.symbol.trim().toUpperCase(),
+      realizedPnl
+    });
+    this.processedSignalIds.add(trade.signalId);
+  }
+
+  updateOpenTradeRealizedPnl(
+    signalId: string,
+    cumulativeRealizedPnl: number,
+    realizedAt: number
+  ): void {
+    if (!Number.isFinite(cumulativeRealizedPnl) ||
+      !Number.isFinite(new Date(realizedAt).getTime())) {
+      throw new PortfolioRiskError("Paper-trade realization is invalid");
+    }
+    const trade = this.openTrades.get(signalId);
+    if (!trade) throw new PortfolioRiskError("Cannot update a paper trade that is not open");
+    const previousRealizedPnl = trade.realizedPnl ?? 0;
+    const realizedPnlDelta = cumulativeRealizedPnl - previousRealizedPnl;
+    const updatedEquity = this.equity + realizedPnlDelta;
+    if (updatedEquity <= 0) {
+      throw new PortfolioRiskError("Realized loss exhausted account equity");
+    }
+    this.equity = updatedEquity;
+    this.recordRealizedLoss(realizedPnlDelta, realizedAt);
+    this.openTrades.set(signalId, { ...trade, realizedPnl: cumulativeRealizedPnl });
   }
 
   assertCanOpenTrade(trade: OpenPaperTrade): void {
@@ -130,23 +180,30 @@ export class PortfolioRiskManager {
     if (!this.openTrades.has(signalId)) {
       throw new PortfolioRiskError("Cannot close a paper trade that is not open");
     }
-
     const updatedEquity = this.equity + realizedPnl;
     if (updatedEquity <= 0) {
       throw new PortfolioRiskError("Realized loss exhausted account equity");
     }
     this.openTrades.delete(signalId);
     this.equity = updatedEquity;
-    if (realizedPnl < 0) {
-      this.realizedLossByDay.set(
-        utcDay(closedAt),
-        (this.realizedLossByDay.get(utcDay(closedAt)) ?? 0) + Math.abs(realizedPnl)
-      );
-      this.realizedLossByWeek.set(
-        utcWeek(closedAt),
-        (this.realizedLossByWeek.get(utcWeek(closedAt)) ?? 0) + Math.abs(realizedPnl)
-      );
+    this.recordRealizedLoss(realizedPnl, closedAt);
+  }
+
+  restoreClosedTrade(signalId: string, realizedPnl: number, closedAt: number): void {
+    if (!signalId.trim() || !Number.isFinite(realizedPnl) ||
+      !Number.isFinite(new Date(closedAt).getTime())) {
+      throw new PortfolioRiskError("Restored trade result is invalid");
     }
+    if (this.processedSignalIds.has(signalId) || this.openTrades.has(signalId)) {
+      throw new PortfolioRiskError("Restored trade has already been processed");
+    }
+    const updatedEquity = this.equity + realizedPnl;
+    if (updatedEquity <= 0) {
+      throw new PortfolioRiskError("Restored losses exhausted account equity");
+    }
+    this.processedSignalIds.add(signalId);
+    this.equity = updatedEquity;
+    this.recordRealizedLoss(realizedPnl, closedAt);
   }
 
   private validateLimits(): void {
@@ -175,9 +232,24 @@ export class PortfolioRiskManager {
       trade.notional <= 0 ||
       !Number.isFinite(trade.plannedRisk) ||
       trade.plannedRisk <= 0 ||
+      (trade.realizedPnl !== undefined && !Number.isFinite(trade.realizedPnl)) ||
       !Number.isFinite(new Date(trade.openedAt).getTime())
     ) {
       throw new PortfolioRiskError("Trade notional, risk, and open time must be valid");
     }
+  }
+
+  private recordRealizedLoss(realizedPnl: number, timestamp: number): void {
+    if (realizedPnl >= 0) return;
+    const day = utcDay(timestamp);
+    const week = utcWeek(timestamp);
+    this.realizedLossByDay.set(
+      day,
+      (this.realizedLossByDay.get(day) ?? 0) + Math.abs(realizedPnl)
+    );
+    this.realizedLossByWeek.set(
+      week,
+      (this.realizedLossByWeek.get(week) ?? 0) + Math.abs(realizedPnl)
+    );
   }
 }

@@ -15,6 +15,7 @@ export interface TelegramUserState {
   readonly accountEquity: number | undefined;
   readonly awaitingAccount: boolean;
   readonly paused: boolean;
+  readonly paperTradingEnabled: boolean;
   readonly enabledStrategies: readonly StrategyId[];
 }
 
@@ -22,6 +23,7 @@ interface MutableTelegramUserState {
   accountEquity: number | undefined;
   awaitingAccount: boolean;
   paused: boolean;
+  paperTradingEnabled: boolean;
   enabledStrategies: Set<StrategyId>;
 }
 
@@ -29,11 +31,12 @@ interface PersistedTelegramUserState {
   readonly accountEquity?: number;
   readonly awaitingAccount: boolean;
   readonly paused: boolean;
+  readonly paperTradingEnabled: boolean;
   readonly enabledStrategies: readonly StrategyId[];
 }
 
 interface PersistedStore {
-  readonly version: 1;
+  readonly version: 2;
   readonly users: Readonly<Record<string, PersistedTelegramUserState>>;
   readonly notificationClaims: readonly string[];
 }
@@ -70,8 +73,16 @@ export class TelegramUserStateStore {
       accountEquity: user.accountEquity,
       awaitingAccount: user.awaitingAccount,
       paused: user.paused,
+      paperTradingEnabled: user.paperTradingEnabled,
       enabledStrategies: Object.freeze([...user.enabledStrategies])
     });
+  }
+
+  listUsers(): readonly { readonly chatId: number; readonly state: TelegramUserState }[] {
+    return [...this.users.keys()].map((chatId) => ({
+      chatId,
+      state: this.get(chatId)
+    }));
   }
 
   setAwaitingAccount(chatId: number, awaiting: boolean): void {
@@ -93,6 +104,15 @@ export class TelegramUserStateStore {
   setPaused(chatId: number, paused: boolean): void {
     this.updateUser(chatId, (user) => {
       user.paused = paused;
+    });
+  }
+
+  setPaperTradingEnabled(chatId: number, enabled: boolean): void {
+    if (enabled && this.get(chatId).accountEquity === undefined) {
+      throw new Error("Set a simulated account balance before enabling paper trading");
+    }
+    this.updateUser(chatId, (user) => {
+      user.paperTradingEnabled = enabled;
     });
   }
 
@@ -141,7 +161,7 @@ export class TelegramUserStateStore {
     }
     if (
       !isRecord(value) ||
-      value.version !== 1 ||
+      (value.version !== 1 && value.version !== 2) ||
       !isRecord(value.users) ||
       !Array.isArray(value.notificationClaims)
     ) {
@@ -166,6 +186,8 @@ export class TelegramUserStateStore {
       if (
         typeof persisted.awaitingAccount !== "boolean" ||
         typeof persisted.paused !== "boolean" ||
+        (persisted.paperTradingEnabled !== undefined &&
+          typeof persisted.paperTradingEnabled !== "boolean") ||
         !Array.isArray(persisted.enabledStrategies) ||
         !persisted.enabledStrategies.every(isStrategyId)
       ) {
@@ -175,6 +197,7 @@ export class TelegramUserStateStore {
         accountEquity,
         awaitingAccount: persisted.awaitingAccount,
         paused: persisted.paused,
+        paperTradingEnabled: persisted.paperTradingEnabled === true,
         enabledStrategies: new Set(persisted.enabledStrategies)
       });
     }
@@ -197,11 +220,12 @@ export class TelegramUserStateStore {
         ...(user.accountEquity === undefined ? {} : { accountEquity: user.accountEquity }),
         awaitingAccount: user.awaitingAccount,
         paused: user.paused,
+        paperTradingEnabled: user.paperTradingEnabled,
         enabledStrategies: [...user.enabledStrategies]
       };
     }
     const snapshot: PersistedStore = {
-      version: 1,
+      version: 2,
       users,
       notificationClaims: [...this.notificationClaims]
     };
@@ -249,6 +273,7 @@ export class TelegramUserStateStore {
         accountEquity: undefined,
         awaitingAccount: false,
         paused: false,
+        paperTradingEnabled: false,
         enabledStrategies: new Set(STRATEGY_IDS)
       };
       this.users.set(chatId, user);

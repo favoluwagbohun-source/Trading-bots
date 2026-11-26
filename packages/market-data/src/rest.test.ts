@@ -50,4 +50,40 @@ describe("Binance REST client", () => {
 
     expect(candles[0]?.closed).toBe(false);
   });
+
+  it("retrieves and validates Binance spot quantity and notional rules", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
+      symbols: [{
+        symbol: "BTCUSDT",
+        filters: [
+          { filterType: "LOT_SIZE", minQty: "0.00001", maxQty: "9000", stepSize: "0.00001" },
+          { filterType: "MARKET_LOT_SIZE", minQty: "0.00002", maxQty: "8000", stepSize: "0.00002" },
+          { filterType: "MIN_NOTIONAL", minNotional: "5" },
+          { filterType: "NOTIONAL", minNotional: "5", maxNotional: "1000000", applyMaxToMarket: true }
+        ]
+      }]
+    }), { status: 200 }));
+    const client = new BinanceRestClient(["https://data-api.binance.vision"], fetchImpl);
+
+    await expect(client.getInstrumentRules("btcusdt")).resolves.toEqual({
+      quantityStep: 0.00002,
+      minimumQuantity: 0.00002,
+      maximumQuantity: 8000,
+      minimumNotional: 5,
+      maximumNotional: 1000000,
+      contractMultiplier: 1
+    });
+    expect(fetchImpl.mock.calls[0]?.[0]).toContain("/api/v3/exchangeInfo?symbol=BTCUSDT");
+  });
+
+  it("rejects incomplete exchange filters instead of guessing sizing rules", async () => {
+    const client = new BinanceRestClient(["https://data-api.binance.vision"], async () =>
+      new Response(JSON.stringify({
+        symbols: [{ symbol: "BTCUSDT", filters: [] }]
+      }), { status: 200 })
+    );
+
+    await expect(client.getInstrumentRules("BTCUSDT"))
+      .rejects.toThrow("incomplete quantity rules");
+  });
 });
