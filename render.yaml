@@ -13,3 +13,14 @@ services:
         value: 3000
       - key: SERVE_WEB_ASSETS
         value: "true"
+      - key: WATCHLIST_SYMBOLS
+        value: "BTCUSDT,ETHUSDT,SOLUSDT"
+      - key: SCAN_INTERVAL_MS
+        value: "30000"
+      - key: PAPER_FEE_RATE_PER_SIDE
+        value: "0.001"
+      - key: PAPER_SLIPPAGE_RATE_PER_SIDE
+        value: "0.001"
+      - key: HEARTBEAT_ENABLED
+        value: "true"
+
