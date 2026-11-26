@@ -1,1023 +1,326 @@
-PROJECT: CRYPTO SIGNAL BOT & CHARTING PLATFORM
+TASK: ENGINEER THE COMPLETE AI MARKET ANALYSIS ENGINE
 
-Developer: David Oluwagbohun
-Development environment: Google Colab + Gemini
-Source control: GitHub
-Production deployment: Independent cloud server
-Primary language: Python for research and strategy development; TypeScript for the production application.
+You are working on an existing cryptocurrency charting and paper-trading application.
 
-1. YOUR ROLE
+The application has already been built.
 
-Act as a senior quantitative software engineer, algorithmic trading systems developer, Python engineer, TypeScript engineer and technical architect.
+DO NOT rebuild the application.
 
-Your responsibility is to help build a complete cryptocurrency market analysis, charting, strategy testing and Telegram signal platform.
+DO NOT replace working components.
 
-This is a substantial engineering project.
+Your task is to inspect, improve and engineer the market-analysis and strategy engines.
 
-Do not approach it as a simple trading indicator or a basic Telegram bot.
+Read the existing codebase, SPEC.md and strategy documentation before modifying anything.
 
-Build it as a modular, testable and maintainable software system.
+OBJECTIVE
 
-IMPORTANT:
+Build a sophisticated, deterministic, multi-timeframe market-analysis engine supporting four independent strategies.
 
-Do not attempt to build everything in one notebook cell.
+The system must use real Binance public market data.
 
-Work in clearly separated development stages.
-
-Preserve completed work.
-
-Do not overwrite working implementations unnecessarily.
-
-Test every important component.
-
-Never invent market data.
-
-Never claim that an untested strategy is profitable.
-
-Never introduce lookahead bias.
+All functionality is for historical research and paper-trading simulation only.
 
 Never implement real-order execution.
 
-2. PROJECT OBJECTIVES
+1. CENTRAL ANALYSIS ORCHESTRATOR
 
-Build a platform containing:
+Create a central analysis orchestrator.
 
-Cryptocurrency market-data engine.
+Its responsibility is to coordinate:
 
-Binance-style chart application.
+- Market-data validation.
+- Multi-timeframe candle synchronization.
+- Market structure analysis.
+- Trendline analysis.
+- Supply/demand analysis.
+- Market regime detection.
+- Strategy evaluation.
+- Risk validation.
+- Signal generation.
+- Chart rendering.
 
-Four independent trading strategies.
+All components must return structured, timestamped results.
 
-Automated 24/7 signal-scanning engine.
+The orchestrator must preserve the exact market-data snapshot used for each analysis.
 
-Telegram notification bot.
-
-Telegram Mini App.
-
-Historical chart replay.
-
-Manual paper trading.
-
-Automated backtesting.
-
-Strategy validation and performance analytics.
-
-Individual account-size and position-size calculations.
-
-Automatic chart-image generation.
-
-The entire system must work without requiring Gemini to remain running.
-
-Gemini is a development assistant, not a production dependency.
-
-3. DATA SOURCE
-
-Use Binance public market data exclusively.
-
-No API keys.
-
-No private exchange credentials.
-
-No mock candles.
-
-No fabricated prices.
-
-Primary REST endpoint:
-
-https://data-api.binance.vision
-
-Primary WebSocket endpoint:
-
-wss://data-stream.binance.vision/ws
-
-Fallback REST:
-
-https://api.binance.com
-
-Use supported Binance public mirrors when necessary.
-
-All Binance requests must originate from the backend.
+2. MULTI-TIMEFRAME ENGINE
 
 Implement:
-
-Historical OHLCV retrieval.
-
-Live WebSocket streams.
-
-Automatic reconnection.
-
-Exponential backoff.
-
-REST polling fallback.
-
-Duplicate candle protection.
-
-Timestamp synchronization.
-
-Candle validation.
-
-Connection health monitoring.
-
-Last-update timestamps.
-
-Distinguish closed candles from unfinished candles.
-
-Unfinished candles must never be treated as confirmed strategy signals.
-
-4. TIMEFRAME STRUCTURE
-
-The primary strategy follows Tori Trades' top-down methodology.
-
-Use this timeframe ladder:
 
 1M → 1W → 1D → 4H → 1H → 5M.
 
 Responsibilities:
 
-1M: Major market direction.
+1M:
+Major market context.
 
-1W: Higher-timeframe trend.
+1W:
+Higher-timeframe trend structure.
 
-1D: Market structure and directional confirmation.
+1D:
+Refinement of trend structure.
 
-4H: Main trendline analysis and important zones.
+4H:
+Major actionable trendlines and zones.
 
-1H: Setup refinement.
+1H:
+Setup refinement.
 
-5M: Actual entry confirmation and execution.
+5M:
+Execution confirmation.
 
-The final execution timeframe is 5M.
+Use only candles that were closed and available at the analysis timestamp.
 
-Higher-timeframe information must be calculated only from candles that were closed and available at the relevant decision time.
+Prevent lookahead and future-candle leakage.
 
-5. FOUR TRADING STRATEGIES
+Do not treat different timeframe candles as if they closed simultaneously.
 
-Create four independently configurable strategies.
+Implement timestamp-aware candle synchronization.
 
-STRATEGY 1: TOP-DOWN TRENDLINE STRATEGY
+3. STRATEGY ONE: TORI TRADES TOP-DOWN TRENDLINE
 
-This is the recommended default strategy.
+Treat this as the recommended primary strategy.
 
-Follow Tori Trades' methodology as closely as can be verified from her educational material.
-
-Important requirements:
-
-Top-down analysis.
-
-Trendline drawing.
-
-Correct swing-point identification.
-
-Multiple qualifying trendline touches.
-
-Break confirmation.
-
-Bounce confirmation.
-
-Retest confirmation.
-
-Higher-timeframe directional bias.
-
-5M execution.
-
-Do not invent trading rules and attribute them to Tori.
-
-Separate verified methodology from engineering assumptions.
-
-STRATEGY 2: BREAK AND RETEST
-
-Identify established price levels.
-
-Require a confirmed breakout.
-
-Wait for price to revisit the broken level.
-
-Require confirmation before entry.
-
-STRATEGY 3: LIQUIDITY SWEEP REVERSAL
-
-Identify historical swing levels.
-
-Detect price movements beyond established levels.
-
-Require a confirmed close back inside the relevant level.
-
-Require reversal confirmation.
-
-STRATEGY 4: ORDER BLOCK RETEST
-
-Identify qualifying displacement.
-
-Identify the preceding opposing candle.
-
-Define the corresponding zone.
-
-Wait for a retest.
-
-Require confirmation before entry.
-
-Each strategy must have separate:
-
-Entry conditions.
-
-Stop-loss rules.
-
-Target calculations.
-
-Backtest results.
-
-Performance reports.
-
-Configuration.
-
-Validation grades.
-
-Do not combine their results into one performance figure.
-
-6. TRENDLINE ENGINE
-
-This is a critical component.
-
-Build a dedicated trendline-detection and validation engine.
-
-Requirements:
-
-Identify confirmed swing highs.
-
-Identify confirmed swing lows.
-
-Detect rising and falling market structures.
-
-Draw ascending trendlines.
-
-Draw descending trendlines.
-
-Store trendline anchor timestamps and prices.
-
-Extend trendlines as rays.
-
-Project higher-timeframe trendlines onto lower timeframes.
-
-Detect qualifying touches.
-
-Detect structural violations.
-
-Identify potential breakouts.
-
-Support historical replay.
-
-Use the actual Tori Trades methodology as the reference.
-
-Do not force every swing point onto a mathematically convenient line.
-
-Do not invent extra scoring rules and claim they are hers.
-
-Where an exact rule is unavailable, document the uncertainty.
-
-7. SUPPLY AND DEMAND ENGINE
-
-Implement supply and demand detection.
-
-Initial research specification:
-
-Base consisting of approximately two to five small candles.
-
-Followed by displacement of at least 2 ATR.
-
-This is an initial testable hypothesis, not a verified rule from Tori.
-
-Support:
-
-Supply zones.
-
-Demand zones.
-
-Zone boundaries.
-
-Zone creation timestamps.
-
-Zone invalidation.
-
-Zone retests.
-
-Zone freshness.
-
-Higher-timeframe zone projection.
-
-Zones can provide confluence and potential target areas.
-
-8. ENTRY AND TRADE MANAGEMENT
-
-The primary execution timeframe is 5M.
-
-Support three entry modes for the primary trendline strategy:
-
-Break.
-
-Bounce.
-
-Retest.
-
-Entry must occur at the next available 5M candle open after a confirmed signal candle closes.
-
-Initial shared risk specifications:
-
-Minimum risk/reward: 1:2.
-
-Account risk: 1% of simulated account equity.
-
-Maximum one open trade per symbol.
-
-Include:
-
-Entry price.
-
-Stop-loss price.
-
-TP1.
-
-TP2.
-
-TP3.
-
-Position size.
-
-Potential profit.
-
-Maximum planned loss.
-
-Risk/reward ratio.
-
-Initial target research configuration:
-
-TP1: 1.5R.
-
-TP2: 3R.
-
-TP3: Trailing runner.
-
-The allocation between targets must be configurable.
-
-At +1R, the initial proposed management rule is moving the stop to break-even.
-
-Trailing stops should use confirmed swing points.
-
-Do not change these rules silently.
-
-9. ACCOUNT MANAGEMENT
-
-When a Telegram user starts the bot, request their simulated account size.
-
-Example:
-
-Account size: $1,000.
-
-Automatically calculate:
-
-Risk = 1% of account equity.
-
-Risk = $10.
-
-Do not ask the user to select a risk percentage.
-
-The user should be able to update their simulated account balance.
-
-Position sizing must use:
-
-Account equity.
-
-Fixed risk percentage.
-
-Entry price.
-
-Stop-loss distance.
-
-Contract quantity rules.
-
-Estimated fees.
-
-Estimated slippage.
-
-Account-size calculations must not override minimum R:R requirements.
-
-If a position cannot be sized within the configured market and risk constraints, reject the simulated trade.
-
-The platform must support small account sizes, including $10, subject to instrument quantity constraints.
-
-10. CHART APPLICATION
-
-Build a clean Binance-inspired dark interface.
-
-Use a suitable lightweight candlestick charting library.
-
-Do not use TradingView Charting Library.
-
-Candlestick colours:
-
-Bullish: #0ECB81.
-
-Bearish: #F6465D.
-
-Background: Dark Binance-inspired theme.
-
-Chart requirements:
-
-Candlestick chart.
-
-Volume panel.
-
-Timeframe selector.
-
-Symbol selector.
-
-Zoom.
-
-Pan.
-
-Crosshair.
-
-Historical candle loading.
-
-Live price updates.
-
-Connection health badge.
-
-OVERLAY LIMITS:
-
-Maximum four trendlines.
-
-Maximum three horizontal levels.
-
-Maximum two supply/demand zones.
-
-Use long, thin trendline rays.
-
-Horizontal levels should be yellow.
-
-Avoid clutter.
-
-Do not place unnecessary dots, arrows or text over candles.
-
-Use small price-axis labels.
-
-TRADE VISUALIZATION:
-
-Entry: Orange.
-
-Stop loss: Red.
-
-Take profits: Blue.
-
-Labels should show relevant price and R values.
-
-11. TELEGRAM SIGNAL BOT
-
-Build a Telegram bot that continuously scans a configurable cryptocurrency watchlist.
-
-The bot must evaluate all four strategies independently.
-
-A signal must pass:
-
-Market-data validation.
-
-Strategy conditions.
-
-Higher-timeframe conditions where applicable.
-
-Entry confirmation.
-
-Stop-loss calculation.
-
-Minimum 1:2 R:R.
-
-Position-size calculation.
-
-Portfolio restrictions.
-
-Signal-quality requirements.
-
-Only then should it be published.
-
-EVERY SIGNAL MUST INCLUDE AN ANALYSED CHART IMAGE.
-
-This is mandatory.
-
-12. TELEGRAM SIGNAL FORMAT
-
-Example:
-
-BTCUSDT — BUY
-
-Strategy: Top-Down Trendline.
-
-Execution timeframe: 5M.
-
-Higher-timeframe bias: BULLISH.
-
-Entry: Calculated price.
-
-Stop Loss: Calculated price.
-
-TP1: Calculated price.
-
-TP2: Calculated price.
-
-TP3: Trailing runner.
-
-Risk: 1% of simulated account equity.
-
-Risk/Reward: At least 1:2.
-
-Signal quality: Calculated score.
-
-Status: PAPER TRADE ACTIVE.
-
-Attach the analysed chart image to the same Telegram notification.
-
-The image must display:
-
-Actual Binance candlesticks.
-
-Relevant trendlines.
-
-Relevant horizontal levels.
-
-Supply/demand zones.
-
-Entry.
-
-Stop loss.
-
-TP1.
-
-TP2.
-
-TP3.
-
-Symbol.
-
-Timeframe.
-
-The image and text notification must use the same market-data snapshot.
-
-Never allow the image and notification to contain inconsistent prices.
-
-13. FOLLOW-UP NOTIFICATIONS
-
-The bot must monitor every active simulated signal.
-
-Send updates when:
-
-TP1 is reached.
-
-TP2 is reached.
-
-TP3 is reached.
-
-Stop loss is reached.
-
-Trailing stop moves.
-
-A position is closed.
-
-A setup becomes invalid.
-
-Generate updated chart images when appropriate.
-
-Prevent duplicate notifications.
-
-Use reliable event tracking so reconnecting the worker does not duplicate trade events.
-
-14. TELEGRAM COMMANDS
+Use Tori Trades' publicly documented trendline concepts as the reference.
 
 Implement:
 
-/start
+- Ascending trendlines.
+- Descending trendlines.
+- Point A and Point B.
+- Progressive trendline construction.
+- Previous Point B becoming the next Point A.
+- Multiple qualifying touchpoints.
+- Price-structure integrity.
+- Trendline rays.
+- Higher-timeframe projection.
+- Action Line identification.
+- Safety Line identification.
 
-/account
+Implement two primary setup types:
 
-/balance
+A. Trendline Bounce.
+B. Trendline Break.
 
-/signals
+A retest module may be implemented separately as an additional research variation.
 
-/performance
+Do not attribute unverified rules to Tori Trades.
 
-/strategies
+Preserve the distinction between source-verified rules and engineering assumptions.
 
-/settings
+For every trendline, store:
 
-/pause
+- Timeframe.
+- Direction.
+- Point A timestamp and price.
+- Point B timestamp and price.
+- Subsequent touchpoints.
+- Creation time.
+- Last validation time.
+- Structural violations.
+- Current validity.
+- Break status.
 
-/resume
+Do not create arbitrary trendlines simply to increase signal frequency.
 
-The Telegram Mini App should display:
+4. ACTION LINE AND SAFETY LINE
 
-Live candlestick charts.
+Implement these as separate first-class objects.
 
-Market information.
+Action Line:
+The line whose confirmed break triggers the setup.
 
-Active paper trades.
+Safety Line:
+The opposing trendline used for simulated risk management and invalidation.
 
-Signal history.
+Both must be visible in the chart-analysis object.
 
-Account statistics.
+A setup must not be approved if the required opposing safety structure is unavailable under the selected strategy rules.
 
-Strategy performance.
+Do not silently substitute an arbitrary fixed stop for a missing safety line.
 
-15. BACKTESTING ENGINE
+5. STRATEGY TWO: BREAK AND RETEST
 
-Develop a proper event-driven historical backtester.
+Implement independent modules for:
 
-Requirements:
+- Significant level identification.
+- Break detection.
+- Breakout validation.
+- Retest detection.
+- Rejection confirmation.
+- Entry validation.
+- Setup invalidation.
 
-Historical OHLCV data.
+Implement a state machine.
 
-Chronological candle processing.
+A breakout must not be confused with a completed retest.
 
-No lookahead.
-
-No future-candle access.
-
-Next-candle-open entries.
-
-Stop-loss simulation.
-
-Take-profit simulation.
-
-Partial exits.
-
-Trailing-stop management.
-
-Fees.
-
-Slippage.
-
-Position sizing.
-
-Equity curve.
-
-Trade history.
-
-When stop loss and take profit are both touched in the same candle, assume stop loss occurs first unless more granular historical data resolves the order.
-
-Calculate:
-
-Total trades.
-
-Winning trades.
-
-Losing trades.
-
-Win rate.
-
-Gross profit.
-
-Gross loss.
-
-Net profit.
-
-Profit factor.
-
-Expectancy.
-
-Average R.
-
-Maximum drawdown.
-
-Consecutive losses.
-
-Average trade duration.
-
-Test each strategy independently.
-
-16. REPLAY MODE
-
-Build a historical candle replay system.
-
-Features:
-
-Symbol selection.
-
-Timeframe selection.
-
-Historical date selection.
-
-Play.
-
-Pause.
-
-Resume.
-
-Step forward one candle.
-
-Playback speed.
-
-Manual trendline drawing.
-
-Manual horizontal levels.
-
-Supply/demand markings.
-
-Manual simulated entries.
-
-Stop-loss and target management.
-
-Trading journal.
-
-The replay engine must not expose future candles to the strategy.
-
-17. PROFESSIONAL VALIDATION
-
-Do not assume any strategy is profitable.
+6. STRATEGY THREE: LIQUIDITY SWEEP REVERSAL
 
 Implement:
 
-Chronological 70/30 training and testing split.
+- Confirmed swing-level identification.
+- Sweep detection.
+- Reclaim detection.
+- Reversal confirmation.
+- Higher-timeframe context.
+- 5M execution validation.
 
-Walk-forward validation.
+A wick beyond a level alone must not create a completed signal.
 
-Out-of-sample testing.
+7. STRATEGY FOUR: ORDER BLOCK RETEST
 
-Parameter robustness.
+Implement:
 
-Monte Carlo analysis.
+- Displacement detection.
+- Originating-candle identification.
+- Zone construction.
+- Zone boundaries.
+- Zone invalidation.
+- Zone revisit tracking.
+- Retest confirmation.
+- 5M execution validation.
 
-Transaction-cost stress testing.
+Keep order-block rules independently configurable.
 
-Market-regime breakdown.
+8. MARKET REGIME ENGINE
 
-Live-versus-backtest drift monitoring.
+Classify the market into:
 
-Create automatic strategy grades:
+- Bullish trend.
+- Bearish trend.
+- Range.
+- High volatility.
+- Low volatility.
+- Transition/uncertain.
 
-A, B, C and D.
+Use documented calculations.
 
-Default Telegram signal requirement:
+Do not rely on an LLM's unstructured opinion to determine market direction.
 
-Grade B or better.
+9. STRATEGY EVALUATION
 
-A strategy must have sufficient evidence before receiving a strong grade.
+Each strategy must independently return:
 
-Do not confuse a signal-quality score with a statistically calibrated probability of winning.
+- Setup status.
+- Direction.
+- Relevant timeframe.
+- Evidence.
+- Entry condition.
+- Invalidation condition.
+- Stop methodology.
+- Target methodology.
+- Reason for approval or rejection.
 
-18. SIGNAL QUALITY SCORING
+Use structured outputs.
 
-Implement a transparent 0–100 quality score.
+10. SIGNAL QUALITY
 
-Possible factors:
+Create a transparent scoring engine.
 
-Higher-timeframe alignment.
+Score from 0 to 100.
 
-Trendline validity.
+Document every scoring component.
 
-Entry confirmation.
+Do not treat the score as a win probability.
 
-Supply/demand confluence.
+Do not use scores to bypass mandatory entry conditions.
 
-Volume conditions.
+11. RISK AND PAPER-TRADE VALIDATION
 
-Candle quality.
+Apply existing project rules.
 
-Market regime.
+- Fixed simulated account risk of 1%.
+- Minimum simulated R:R of 1:2.
+- Automatic position-size calculation.
+- Configurable portfolio limits.
+- Fees and slippage.
+- No real orders.
 
-Risk/reward.
+Reject setups that fail mandatory conditions.
 
-Document the contribution of every factor.
+12. CHART ANALYSIS OUTPUT
 
-Do not use arbitrary scores that have no documented reasoning.
+The strategy engine must produce a standardized analysis object.
 
-19. PORTFOLIO RISK MANAGEMENT
+The chart renderer must consume that exact object.
 
-Implement configurable:
+Never calculate separate entry, stop or target prices in the chart renderer.
 
-Maximum open trades.
+The image sent to Telegram must represent the same analysis snapshot as the signal.
 
-Maximum daily loss.
+13. TESTING REQUIREMENTS
 
-Maximum weekly loss.
+Create deterministic tests for:
 
-Correlation restrictions.
+- Swing detection.
+- Trendline construction.
+- Point A/Point B progression.
+- Touchpoint validation.
+- Structural violations.
+- Action Line detection.
+- Safety Line detection.
+- Break confirmation.
+- Bounce confirmation.
+- Retest confirmation.
+- Liquidity sweep detection.
+- Reclaim confirmation.
+- Order-block detection.
+- Zone invalidation.
+- Multi-timeframe synchronization.
+- Lookahead prevention.
+- Signal rejection.
+- Risk calculations.
+- Chart snapshot consistency.
 
-Exposure limits.
+Use historical fixtures with known expected outcomes.
 
-Duplicate signal prevention.
+Do not use random data to claim strategy effectiveness.
 
-These controls must be enforced centrally.
+14. VALIDATION
 
-20. TECHNOLOGY ARCHITECTURE
+Test each strategy separately.
 
-RESEARCH:
+Use chronological historical splits.
 
-Python notebooks in Google Colab.
+Perform:
 
-PRODUCTION:
+- In-sample testing.
+- Out-of-sample testing.
+- Walk-forward validation.
+- Parameter sensitivity.
+- Fee and slippage stress tests.
+- Market-regime breakdown.
+- Paper-trading comparison.
 
-TypeScript and Node.js.
+Do not claim profitability without results.
 
-FRONTEND:
+15. DEVELOPMENT RULES
 
-React.
+First inspect the existing implementation.
 
-CHARTS:
+Identify missing functionality and existing bugs.
 
-KLineCharts or an equivalent suitable lightweight library.
+Do not duplicate working modules.
 
-BACKEND:
+Implement in small stages.
 
-Fastify.
+After each stage:
 
-DATABASE:
+1. Run relevant tests.
+2. Run TypeScript checks.
+3. Inspect integration.
+4. Report changed files.
+5. Report incomplete functionality.
+6. Update SPEC.md.
 
-PostgreSQL for production.
+Never introduce mock market data.
 
-SQLite may be used for isolated research prototypes.
+Never introduce lookahead bias.
 
-TELEGRAM:
+Never implement real-order execution.
 
-Telegram Bot API.
+The final result must be a deterministic, independently testable market-analysis engine.
 
-TESTING:
-
-Vitest for TypeScript.
-
-Pytest for Python research.
-
-SOURCE CONTROL:
-
-GitHub.
-
-HOSTING:
-
-Independent cloud hosting for API, database and continuously running worker.
-
-Do not depend on Google Colab for production hosting.
-
-Do not depend on Gemini for application execution.
-
-21. PROJECT STRUCTURE
-
-Use the following production structure:
-
-crypto-signal-platform/
-
-apps/ web/ api/ telegram/ worker/
-
-packages/ market-data/ indicators/ strategies/ backtesting/ risk-engine/ chart-renderer/ shared/
-
-research/ notebooks/ datasets/ experiments/
-
-tests/
-
-docs/
-
-SPEC.md
-
-README.md
-
-package.json
-
-tsconfig.base.json
-
-Create modular components with clear responsibilities.
-
-22. DEVELOPMENT WORKFLOW
-
-You are working inside Google Colab.
-
-Build the project in manageable stages.
-
-STAGE 1: Project setup and architecture.
-
-STAGE 2: Binance market-data engine.
-
-STAGE 3: Indicator and market-structure engine.
-
-STAGE 4: Trendline research and detection.
-
-STAGE 5: Top-Down Trendline Strategy.
-
-STAGE 6: Three additional strategies.
-
-STAGE 7: Risk management and position sizing.
-
-STAGE 8: Historical backtesting.
-
-STAGE 9: Replay and manual paper trading.
-
-STAGE 10: Chart application.
-
-STAGE 11: Telegram integration.
-
-STAGE 12: Chart-image generation.
-
-STAGE 13: Performance dashboard.
-
-STAGE 14: Professional validation.
-
-STAGE 15: Production preparation and deployment.
-
-Do not skip testing to save time.
-
-23. GOOGLE COLAB DEVELOPMENT RULES
-
-Colab is a temporary development and research environment.
-
-Therefore:
-
-Save code to Google Drive when appropriate.
-
-Export completed source files.
-
-Maintain GitHub synchronization.
-
-Avoid keeping important code exclusively inside notebook memory.
-
-Make notebooks reproducible.
-
-Keep configuration separate from implementation.
-
-Never expose secrets in notebook outputs.
-
-Do not require Gemini to run the completed system.
-
-Every completed stage must be exportable.
-
-24. ACCEPTANCE TESTS
-
-Before declaring the project ready:
-
-Verify Binance data against actual public market data.
-
-Verify WebSocket reconnection.
-
-Verify candle timestamps.
-
-Verify indicator calculations.
-
-Verify swing-point confirmation delays.
-
-Verify trendline anchors.
-
-Verify touch detection.
-
-Verify break confirmation.
-
-Verify 5M entry timing.
-
-Verify position-size calculations.
-
-Verify the 1% risk rule.
-
-Verify minimum 1:2 R:R.
-
-Verify backtesting has no lookahead.
-
-Verify replay has no future-candle access.
-
-Verify Telegram chart-image consistency.
-
-Verify duplicate signal protection.
-
-Verify follow-up notification handling.
-
-Verify all four strategies independently.
-
-Verify the application works without Gemini.
-
-Verify no real-order execution exists.
-
-25. FINAL DEVELOPMENT INSTRUCTIONS
-
-Begin with repository inspection and Stage 1.
-
-Do not attempt to implement all fifteen stages immediately.
-
-For each stage:
-
-Explain what will be built.
-
-Identify the files involved.
-
-Implement the functionality.
-
-Run tests.
-
-Fix errors.
-
-Report completed work.
-
-Report outstanding work.
-
-Export and preserve the source code.
-
-If the notebook runtime disconnects, the project must remain recoverable from saved files.
-
-If a strategy rule is uncertain, ask for clarification rather than inventing methodology.
-
-The ultimate objective is a reliable, independently deployable cryptocurrency charting and paper-trading signal platform.
-
-PRIORITY:
-
-Correctness > Reliability > Validation > Performance > Additional Features.
-
-Begin now with Stage 1.
+BEGIN WITH A CODEBASE AUDIT.
+Do not start by rewriting files.
