@@ -12,6 +12,7 @@
   "dependencies": {
     "@crypto-signal/market-data": "0.1.0",
     "@crypto-signal/shared": "0.1.0",
+    "@crypto-signal/strategies": "0.1.0",
     "lightweight-charts": "^5.0.8",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

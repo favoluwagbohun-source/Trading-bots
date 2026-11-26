@@ -3,7 +3,10 @@ import {
   buildTrendlineLifecycles,
   classifyMarketStructure,
   classifyMarketRegime,
+  detectTrendlines,
   findConfirmedSwings,
+  findTrendlineBreaks,
+  trendlinePrice,
   type MarketStructure,
   type MarketRegimeResult,
   type SwingPoint,
@@ -16,7 +19,11 @@ import {
 } from "./additional-types.js";
 import { evaluateBreakAndRetestState } from "./break-and-retest.js";
 import { evaluateLiquiditySweep } from "./liquidity-sweep-reversal.js";
-import { evaluateOrderBlockRetest } from "./order-block-retest.js";
+import {
+  evaluateOrderBlockRetest,
+  findActiveOrderBlocks,
+  type ActiveOrderBlockZone
+} from "./order-block-retest.js";
 import {
   activateAtNextOpen,
   evaluateTopDownTrendline,
@@ -25,6 +32,198 @@ import {
   type TopDownBias,
   type TopDownTimeframe
 } from "./top-down-trendline.js";
+
+import type { OrderBlockOptions } from "./order-block-retest.js";
+
+export type { ActiveOrderBlockZone };
+
+export function detectActiveOrderBlocks(
+  candles: readonly Candle[],
+  options?: Partial<OrderBlockOptions>
+): readonly ActiveOrderBlockZone[] {
+  if (candles.length < 3) return [];
+  return findActiveOrderBlocks({
+    candles,
+    atrValues: atr(candles),
+    ...(options === undefined ? {} : { options })
+  });
+}
+
+export interface ChartTrendlineSummary {
+  readonly id: string;
+  readonly timeframe: AnalysisMarketTimeframe;
+  readonly direction: "ascending" | "descending";
+  readonly status: "valid" | "broken";
+  readonly breakStatus: "unbroken" | "broken_above" | "broken_below";
+  readonly qualifyingTouchCount: number;
+  readonly anchorA: { readonly openTime: number; readonly price: number };
+  readonly anchorB: { readonly openTime: number; readonly price: number };
+  readonly touchpoints: readonly { readonly openTime: number; readonly price: number }[];
+  readonly createdAt: number;
+}
+
+function passesBodyRespect(
+  candles: readonly Candle[],
+  line: Trendline
+): boolean {
+  const tolerance = 0.0025;
+  for (let i = line.anchorA.candleIndex + 1; i < line.anchorB.candleIndex; i += 1) {
+    const candle = candles[i];
+    if (!candle?.closed) continue;
+    const projected = trendlinePrice(line, i);
+    const close = Number(candle.close);
+    if (line.direction === "ascending" && close < projected * (1 - tolerance)) return false;
+    if (line.direction === "descending" && close > projected * (1 + tolerance)) return false;
+  }
+  return true;
+}
+
+function collectSwingTouchpoints(
+  candles: readonly Candle[],
+  swings: readonly SwingPoint[],
+  line: Trendline,
+  tolerancePercent: number
+): readonly { readonly openTime: number; readonly price: number }[] {
+  const matching = swings
+    .filter((s) => s.direction === (line.direction === "ascending" ? "low" : "high"))
+    .filter((s) => s.index >= line.anchorA.candleIndex)
+    .sort((a, b) => a.index - b.index);
+
+  const touches: { candleIndex: number; openTime: number; price: number }[] = [
+    {
+      candleIndex: line.anchorA.candleIndex,
+      openTime: line.anchorA.openTime,
+      price: line.anchorA.price
+    },
+    {
+      candleIndex: line.anchorB.candleIndex,
+      openTime: line.anchorB.openTime,
+      price: line.anchorB.price
+    }
+  ];
+
+  for (const swing of matching) {
+    if (swing.index === line.anchorA.candleIndex || swing.index === line.anchorB.candleIndex) {
+      continue;
+    }
+    const projected = trendlinePrice(line, swing.index);
+    const tol = Math.abs(projected) * (tolerancePercent / 100);
+    if (Math.abs(swing.price - projected) <= tol) {
+      touches.push({
+        candleIndex: swing.index,
+        openTime: swing.openTime,
+        price: swing.price
+      });
+    }
+  }
+
+  touches.sort((a, b) => a.candleIndex - b.candleIndex);
+  const spaced: { candleIndex: number; openTime: number; price: number }[] = [];
+  for (const item of touches) {
+    const prev = spaced.at(-1);
+    if (prev && item.candleIndex - prev.candleIndex < 5) continue;
+    spaced.push(item);
+    if (spaced.length >= 6) break;
+  }
+
+  // Ensure both anchors are represented if distinct enough
+  if (spaced.length < 2 && candles[line.anchorB.candleIndex]) {
+    return [
+      { openTime: line.anchorA.openTime, price: line.anchorA.price },
+      { openTime: line.anchorB.openTime, price: line.anchorB.price }
+    ];
+  }
+  return spaced.map(({ openTime, price }) => ({ openTime, price }));
+}
+
+export function detectChartTrendlines(
+  timeframe: AnalysisMarketTimeframe,
+  candles: readonly Candle[],
+  swings: readonly SwingPoint[],
+  existingLifecycles: readonly TrendlineLifecycle[]
+): readonly ChartTrendlineSummary[] {
+  if (candles.length < 16) return [];
+  const results: { summary: ChartTrendlineSummary; span: number }[] = [];
+  const seenIds = new Set<string>();
+
+  for (const lifecycle of existingLifecycles) {
+    const span = lifecycle.pointB.candleIndex - lifecycle.pointA.candleIndex;
+    if (span < 6 && !lifecycle.isValid) continue;
+    const spacedTouches = lifecycle.touchpoints.filter((pt, idx, arr) => {
+      if (idx === 0) return true;
+      return pt.candleIndex - arr[idx - 1]!.candleIndex >= 4;
+    });
+    const summary: ChartTrendlineSummary = {
+      id: lifecycle.id,
+      timeframe,
+      direction: lifecycle.direction,
+      status: lifecycle.isValid ? "valid" : "broken",
+      breakStatus: lifecycle.breakStatus,
+      qualifyingTouchCount: Math.max(2, spacedTouches.length),
+      anchorA: { openTime: lifecycle.pointA.openTime, price: lifecycle.pointA.price },
+      anchorB: { openTime: lifecycle.pointB.openTime, price: lifecycle.pointB.price },
+      touchpoints: spacedTouches.slice(0, 6).map((pt) => ({ openTime: pt.openTime, price: pt.price })),
+      createdAt: lifecycle.createdAt
+    };
+    seenIds.add(summary.id);
+    results.push({ summary, span });
+  }
+
+  const majorSwings = findConfirmedSwings(candles, { leftBars: 4, rightBars: 4 });
+  const fallbackSwings = findConfirmedSwings(candles, { leftBars: 3, rightBars: 3 });
+  const candidateSwings =
+    majorSwings.length >= 6 ? majorSwings : fallbackSwings.length >= 4 ? fallbackSwings : swings;
+  const twoTouch = detectTrendlines(candles, candidateSwings, {
+    minimumTouches: 2,
+    tolerancePercent: 0.6,
+    maximumTrendlines: 18
+  });
+
+  for (const line of twoTouch) {
+    const span = line.anchorB.candleIndex - line.anchorA.candleIndex;
+    if (span < 10) continue;
+    const id = `${timeframe}:${line.direction}:${line.anchorA.openTime}:${line.anchorB.openTime}`;
+    if (seenIds.has(id)) continue;
+    if (!passesBodyRespect(candles, line)) continue;
+
+    const breaks = findTrendlineBreaks(candles, [line]);
+    const firstBreak = breaks[0];
+    const breakStatus: ChartTrendlineSummary["breakStatus"] = !firstBreak
+      ? "unbroken"
+      : firstBreak.direction === "break_above"
+        ? "broken_above"
+        : "broken_below";
+    const status: ChartTrendlineSummary["status"] = firstBreak ? "broken" : "valid";
+    const touchpoints = collectSwingTouchpoints(candles, candidateSwings, line, 0.75);
+    seenIds.add(id);
+    results.push({
+      span,
+      summary: {
+        id,
+        timeframe,
+        direction: line.direction,
+        status,
+        breakStatus,
+        qualifyingTouchCount: touchpoints.length,
+        anchorA: { openTime: line.anchorA.openTime, price: line.anchorA.price },
+        anchorB: { openTime: line.anchorB.openTime, price: line.anchorB.price },
+        touchpoints,
+        createdAt: line.confirmedAtTime
+      }
+    });
+  }
+
+  return results
+    .sort(
+      (left, right) =>
+        Number(right.summary.status === "valid") - Number(left.summary.status === "valid") ||
+        Number(right.span >= 12) - Number(left.span >= 12) ||
+        right.summary.qualifyingTouchCount - left.summary.qualifyingTouchCount ||
+        right.summary.anchorB.openTime - left.summary.anchorB.openTime
+    )
+    .slice(0, 8)
+    .map((entry) => entry.summary);
+}
 
 export type AnalysisMarketTimeframe = "1M" | "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
 

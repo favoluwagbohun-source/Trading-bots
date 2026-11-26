@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import type { Candle } from "@crypto-signal/shared";
+import type { Candle, StrategyId } from "@crypto-signal/shared";
 import type { MarketTimeframe } from "@crypto-signal/market-data";
+import {
+  OVERLAY_LENS_OPTIONS,
+  selectChartAnalysisOverlay,
+  type OverlayLens
+} from "./chart-overlays.js";
 import { AnalysisView } from "./components/AnalysisView.js";
 import { EngineStatusView } from "./components/EngineStatusView.js";
 import { MarketChart } from "./components/MarketChart.js";
 import { PairPickerModal } from "./components/PairPickerModal.js";
+import { QuantSignalsView } from "./components/QuantSignalsView.js";
+import { StrategyOverlayToggles } from "./components/StrategyOverlayToggles.js";
 import { PaperDashboard } from "./PaperDashboard.js";
 import {
   ORDERED_TIMEFRAMES,
@@ -28,7 +35,7 @@ import {
   type PlatformHealthBundle
 } from "./market-api.js";
 
-type AppTab = "chart" | "analysis" | "desk" | "engine";
+type AppTab = "chart" | "analysis" | "quant" | "desk" | "engine";
 type ConnectionState = "loading" | "connecting" | "connected" | "reconnecting" | "historical" | "error";
 
 const DEFAULT_PAIRS = ["BTCUSDT", "BTCUSDC", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
@@ -42,7 +49,7 @@ function initialSymbolFromUrl(): string {
 function initialTabFromUrl(): AppTab {
   if (typeof window === "undefined") return "chart";
   const raw = new URLSearchParams(window.location.search).get("tab");
-  if (raw === "analysis" || raw === "desk" || raw === "engine") return raw;
+  if (raw === "analysis" || raw === "quant" || raw === "desk" || raw === "engine") return raw;
   return "chart";
 }
 
@@ -59,7 +66,10 @@ export function ChartPage() {
   const [error, setError] = useState<string | null>(null);
   const [showTools, setShowTools] = useState(false);
   const [showSideRail, setShowSideRail] = useState(true);
-  const [showAutoOverlays, setShowAutoOverlays] = useState(true);
+  const [overlayLens, setOverlayLens] = useState<OverlayLens>("auto");
+  const [enabledStrategies, setEnabledStrategies] = useState<Set<OverlayLens | "swings">>(
+    () => new Set(["top_down_trendline", "break_and_retest", "liquidity_sweep_reversal", "order_block_retest", "swings"])
+  );
   const [pairPickerOpen, setPairPickerOpen] = useState(false);
   const [activeTradeOverlay, setActiveTradeOverlay] = useState<ChartTradeOverlay | null>(null);
 
@@ -96,6 +106,18 @@ export function ChartPage() {
   const topDownSummary = useMemo(
     () => (analysis ? summarizeTopDownAlignment(analysis.timeframes) : null),
     [analysis]
+  );
+
+  const overlayBundle = useMemo(
+    () =>
+      selectChartAnalysisOverlay({
+        enabledStrategies,
+        chartTimeframe: timeframe,
+        candles,
+        analysis,
+        activeTradeOverlay
+      }),
+    [activeTradeOverlay, analysis, candles, enabledStrategies, timeframe]
   );
 
   useEffect(() => {
@@ -272,8 +294,50 @@ export function ChartPage() {
   const handlePlotTrade = useCallback((overlay: ChartTradeOverlay) => {
     setSymbol(overlay.symbol);
     setTimeframe("5m");
+    setOverlayLens(overlay.strategy ?? "auto");
     setActiveTradeOverlay(overlay);
     setActiveTab("chart");
+  }, []);
+
+  const handlePreviewStrategy = useCallback((strategy: StrategyId) => {
+    setOverlayLens(strategy);
+    if (strategy === "top_down_trendline") {
+      setTimeframe("4h");
+    } else {
+      setTimeframe("5m");
+    }
+    setActiveTab("chart");
+  }, []);
+
+  const handleSelectOverlayLens = useCallback((nextLens: OverlayLens) => {
+    setOverlayLens(nextLens);
+    if (nextLens === "top_down_trendline") {
+      setTimeframe("4h");
+    } else if (nextLens === "order_block_retest") {
+      setTimeframe("5m");
+    }
+  }, []);
+
+  const handleToggleStrategyOverlay = useCallback((strategy: OverlayLens | "swings") => {
+    setEnabledStrategies((current) => {
+      const next = new Set(current);
+      if (next.has(strategy)) {
+        next.delete(strategy);
+      } else {
+        next.add(strategy);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSelectAllStrategies = useCallback((enable: boolean) => {
+    if (enable) {
+      setEnabledStrategies(
+        new Set(["top_down_trendline", "break_and_retest", "liquidity_sweep_reversal", "order_block_retest", "swings"])
+      );
+    } else {
+      setEnabledStrategies(new Set());
+    }
   }, []);
 
   function applyDateRange(event: FormEvent<HTMLFormElement>): void {
@@ -440,14 +504,18 @@ export function ChartPage() {
               <span className={`stream-text stream-${connectionState}`}>
                 {connectionMessage}
               </span>
-              <button
-                type="button"
-                className={showAutoOverlays ? "bar-button active" : "bar-button"}
-                onClick={() => setShowAutoOverlays((value) => !value)}
-                aria-pressed={showAutoOverlays}
+              <select
+                className="ta-overlay-select"
+                aria-label="Technical analysis overlay"
+                value={overlayLens}
+                onChange={(event) => handleSelectOverlayLens(event.target.value as OverlayLens)}
               >
-                4H Lines
-              </button>
+                {OVERLAY_LENS_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
                 className={showTools ? "bar-button active" : "bar-button"}
@@ -475,9 +543,7 @@ export function ChartPage() {
                 showTools={showTools}
                 onCloseTools={() => setShowTools(false)}
                 dateControls={dateControls}
-                autoTrendlines={analysis?.fourHourTrendlines ?? []}
-                swingLevels={analysis?.swingLevels ?? []}
-                showAutoOverlays={showAutoOverlays}
+                overlayBundle={overlayBundle}
                 activeTradeOverlay={activeTradeOverlay}
                 onClearTradeOverlay={() => setActiveTradeOverlay(null)}
               />
@@ -525,6 +591,12 @@ export function ChartPage() {
                   </div>
                 )}
 
+                <StrategyOverlayToggles
+                  enabledStrategies={enabledStrategies}
+                  onToggle={handleToggleStrategyOverlay}
+                  onSelectAll={handleSelectAllStrategies}
+                />
+
                 <AnalysisView
                   symbol={symbol}
                   analysis={analysis}
@@ -533,10 +605,8 @@ export function ChartPage() {
                   compact
                   onRefresh={() => setAnalysisTick((v) => v + 1)}
                   onPlotTrade={handlePlotTrade}
-                  onOpenChartWithAutoLines={() => {
-                    setShowAutoOverlays(true);
-                    setActiveTab("chart");
-                  }}
+                  onPreviewStrategy={handlePreviewStrategy}
+                  onOpenChartWithAutoLines={() => handlePreviewStrategy("top_down_trendline")}
                 />
               </aside>
             )}
@@ -552,10 +622,8 @@ export function ChartPage() {
           error={analysisError}
           onRefresh={() => setAnalysisTick((v) => v + 1)}
           onPlotTrade={handlePlotTrade}
-          onOpenChartWithAutoLines={() => {
-            setShowAutoOverlays(true);
-            setActiveTab("chart");
-          }}
+          onPreviewStrategy={handlePreviewStrategy}
+          onOpenChartWithAutoLines={() => handlePreviewStrategy("top_down_trendline")}
         />
       )}
 

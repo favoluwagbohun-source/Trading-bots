@@ -32,23 +32,60 @@ export interface TimeframeSummary {
   readonly candleCount: number;
 }
 
+export interface TrendlineTouchpoint {
+  readonly openTime: number;
+  readonly price: number;
+}
+
 export interface FourHourTrendline {
   readonly id: string;
+  readonly timeframe?: MarketTimeframe;
   readonly direction: "ascending" | "descending";
   readonly status: "valid" | "broken";
   readonly breakStatus: "unbroken" | "broken_above" | "broken_below";
   readonly qualifyingTouchCount: number;
-  readonly anchorA: { readonly openTime: number; readonly price: number };
-  readonly anchorB: { readonly openTime: number; readonly price: number };
+  readonly anchorA: TrendlineTouchpoint;
+  readonly anchorB: TrendlineTouchpoint;
+  readonly touchpoints?: readonly TrendlineTouchpoint[];
   readonly projectedPrice: number;
 }
 
+export type SwingStructureTag = "HH" | "LH" | "HL" | "LL" | "SH" | "SL";
+
 export interface SwingLevel {
   readonly id: string;
-  readonly timeframe: "4h" | "1h";
+  readonly timeframe: MarketTimeframe;
   readonly direction: "high" | "low";
+  readonly structureTag?: SwingStructureTag;
   readonly price: number;
   readonly openTime: number;
+}
+
+export interface ActiveOrderBlockZone {
+  readonly timeframe?: MarketTimeframe;
+  readonly side: "buy" | "sell";
+  readonly direction: "demand" | "supply";
+  readonly low: number;
+  readonly high: number;
+  readonly startTime: number;
+  readonly displacementTime: number;
+}
+
+export interface ChartAnnotationsView {
+  readonly actionLine?: FourHourTrendline;
+  readonly safetyLine?: FourHourTrendline;
+  readonly trendline?: {
+    readonly id: string;
+    readonly qualifyingTouchCount: number;
+    readonly anchorA: TrendlineTouchpoint;
+    readonly anchorB: TrendlineTouchpoint;
+  };
+  readonly levels: readonly { readonly label: string; readonly price: number }[];
+  readonly zones: readonly {
+    readonly label: string;
+    readonly low: number;
+    readonly high: number;
+  }[];
 }
 
 export interface StrategyEvaluationSummary {
@@ -79,6 +116,7 @@ export interface SignalCandidateSummary {
   readonly minimumRiskReward: number;
   readonly higherTimeframeBias: string;
   readonly entryCandleOpenTime: number;
+  readonly chartAnnotations?: ChartAnnotationsView;
 }
 
 export interface MarketAnalysisData {
@@ -89,7 +127,10 @@ export interface MarketAnalysisData {
   readonly signalCandle: Candle;
   readonly timeframes: readonly TimeframeSummary[];
   readonly fourHourTrendlines: readonly FourHourTrendline[];
+  readonly trendlinesByTimeframe?: Readonly<Partial<Record<MarketTimeframe, readonly FourHourTrendline[]>>>;
   readonly swingLevels: readonly SwingLevel[];
+  readonly swingsByTimeframe?: Readonly<Partial<Record<MarketTimeframe, readonly SwingLevel[]>>>;
+  readonly activeOrderBlocks?: readonly ActiveOrderBlockZone[];
   readonly evaluations: readonly StrategyEvaluationSummary[];
   readonly candidates: readonly SignalCandidateSummary[];
   readonly warnings: readonly string[];

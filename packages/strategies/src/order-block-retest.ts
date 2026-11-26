@@ -26,6 +26,96 @@ const DEFAULT_OPTIONS: OrderBlockOptions = {
   invalidationMode: "close"
 };
 
+export interface ActiveOrderBlockZone {
+  readonly side: "buy" | "sell";
+  readonly direction: "demand" | "supply";
+  readonly low: number;
+  readonly high: number;
+  readonly startTime: number;
+  readonly displacementTime: number;
+}
+
+export function findActiveOrderBlocks(input: {
+  readonly candles: readonly Candle[];
+  readonly atrValues: readonly number[];
+  readonly options?: Partial<OrderBlockOptions>;
+}): ActiveOrderBlockZone[] {
+  const options = { ...DEFAULT_OPTIONS, ...input.options };
+  if (!Number.isFinite(options.displacementAtrMultiple) || options.displacementAtrMultiple <= 0) {
+    throw new Error("displacementAtrMultiple must be positive");
+  }
+  if (!Number.isInteger(options.maximumZoneAgeCandles) || options.maximumZoneAgeCandles < 1) {
+    throw new Error("maximumZoneAgeCandles must be a positive integer");
+  }
+  if (options.invalidationMode !== "close" && options.invalidationMode !== "wick") {
+    throw new Error("invalidationMode must be close or wick");
+  }
+  if (input.atrValues.length !== input.candles.length) {
+    throw new Error("ATR values must align with candle indexes");
+  }
+
+  const candles = input.candles;
+  const currentIndex = candles.length - 1;
+  if (currentIndex < 2) return [];
+
+  const zones: ActiveOrderBlockZone[] = [];
+  for (
+    let displacementIndex = currentIndex - 1;
+    displacementIndex >= Math.max(1, currentIndex - options.maximumZoneAgeCandles);
+    displacementIndex -= 1
+  ) {
+    const block = candles[displacementIndex - 1]!;
+    const displacement = candles[displacementIndex]!;
+    if (!block.closed || !displacement.closed) continue;
+    const atr = input.atrValues[displacementIndex]!;
+    if (!Number.isFinite(atr) || atr <= 0) continue;
+
+    const displacementDirection = Number(displacement.close) > Number(displacement.open)
+      ? "buy"
+      : Number(displacement.close) < Number(displacement.open)
+        ? "sell"
+        : undefined;
+    if (!displacementDirection) continue;
+    const blockOpposes = displacementDirection === "buy"
+      ? Number(block.close) < Number(block.open)
+      : Number(block.close) > Number(block.open);
+    const body = Math.abs(Number(displacement.close) - Number(displacement.open));
+    if (!blockOpposes || body < atr * options.displacementAtrMultiple) continue;
+
+    const zoneLow = Number(block.low);
+    const zoneHigh = Number(block.high);
+    let invalidated = false;
+    for (let index = displacementIndex + 1; index <= currentIndex; index += 1) {
+      const between = candles[index]!;
+      if (!between.closed) continue;
+      if (
+        displacementDirection === "buy"
+          ? options.invalidationMode === "close"
+            ? Number(between.close) < zoneLow
+            : Number(between.low) < zoneLow
+          : options.invalidationMode === "close"
+            ? Number(between.close) > zoneHigh
+            : Number(between.high) > zoneHigh
+      ) {
+        invalidated = true;
+        break;
+      }
+    }
+    if (invalidated) continue;
+
+    zones.push({
+      side: displacementDirection,
+      direction: displacementDirection === "buy" ? "demand" : "supply",
+      low: zoneLow,
+      high: zoneHigh,
+      startTime: block.openTime,
+      displacementTime: displacement.openTime
+    });
+    if (zones.length >= 3) break;
+  }
+  return zones;
+}
+
 export function evaluateOrderBlockRetest(
   input: OrderBlockInput
 ): StrategySetup | undefined {

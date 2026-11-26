@@ -3,9 +3,13 @@ import type { Candle, StrategyId } from "@crypto-signal/shared";
 import {
   ANALYSIS_TIMEFRAMES,
   MarketAnalysisOrchestrator,
+  detectActiveOrderBlocks,
+  detectChartTrendlines,
+  type ActiveOrderBlockZone,
   type AnalysisMarketTimeframe,
   type ChartAnnotations,
-  type StrategyEvaluation
+  type StrategyEvaluation,
+  type TimeframeAnalysis
 } from "@crypto-signal/strategies";
 
 export interface TimeframeSummaryView {
@@ -19,21 +23,31 @@ export interface TimeframeSummaryView {
   readonly candleCount: number;
 }
 
+export interface TrendlineTouchpointView {
+  readonly openTime: number;
+  readonly price: number;
+}
+
 export interface FourHourTrendlineView {
   readonly id: string;
+  readonly timeframe: MarketTimeframe;
   readonly direction: "ascending" | "descending";
   readonly status: "valid" | "broken";
   readonly breakStatus: "unbroken" | "broken_above" | "broken_below";
   readonly qualifyingTouchCount: number;
-  readonly anchorA: { readonly openTime: number; readonly price: number };
-  readonly anchorB: { readonly openTime: number; readonly price: number };
+  readonly anchorA: TrendlineTouchpointView;
+  readonly anchorB: TrendlineTouchpointView;
+  readonly touchpoints: readonly TrendlineTouchpointView[];
   readonly projectedPrice: number;
 }
 
+export type SwingStructureTag = "HH" | "LH" | "HL" | "LL" | "SH" | "SL";
+
 export interface SwingLevelView {
   readonly id: string;
-  readonly timeframe: "4h" | "1h";
+  readonly timeframe: MarketTimeframe;
   readonly direction: "high" | "low";
+  readonly structureTag: SwingStructureTag;
   readonly price: number;
   readonly openTime: number;
 }
@@ -62,7 +76,10 @@ export interface MarketAnalysisView {
   readonly signalCandle: Candle;
   readonly timeframes: readonly TimeframeSummaryView[];
   readonly fourHourTrendlines: readonly FourHourTrendlineView[];
+  readonly trendlinesByTimeframe: Readonly<Partial<Record<MarketTimeframe, readonly FourHourTrendlineView[]>>>;
   readonly swingLevels: readonly SwingLevelView[];
+  readonly swingsByTimeframe: Readonly<Partial<Record<MarketTimeframe, readonly SwingLevelView[]>>>;
+  readonly activeOrderBlocks: readonly (ActiveOrderBlockZone & { readonly timeframe?: MarketTimeframe })[];
   readonly evaluations: readonly StrategyEvaluation[];
   readonly candidates: readonly SignalCandidateView[];
   readonly warnings: readonly string[];
@@ -81,6 +98,70 @@ function projectPrice(
   const duration = anchorB.openTime - anchorA.openTime;
   if (duration <= 0) return anchorB.price;
   return anchorA.price + ((anchorB.price - anchorA.price) / duration) * (atTime - anchorA.openTime);
+}
+
+function mapTimeframeTrendlines(
+  timeframe: MarketTimeframe,
+  entry: TimeframeAnalysis,
+  analysisTime: number
+): readonly FourHourTrendlineView[] {
+  const visual = detectChartTrendlines(
+    timeframe as AnalysisMarketTimeframe,
+    entry.candles,
+    entry.swings,
+    entry.trendlineLifecycles
+  );
+  return visual.slice(0, 6).map((item) => ({
+    id: item.id,
+    timeframe,
+    direction: item.direction,
+    status: item.status,
+    breakStatus: item.breakStatus,
+    qualifyingTouchCount: item.qualifyingTouchCount,
+    anchorA: item.anchorA,
+    anchorB: item.anchorB,
+    touchpoints: item.touchpoints,
+    projectedPrice: projectPrice(item.anchorA, item.anchorB, analysisTime)
+  }));
+}
+
+function mapTimeframeSwings(
+  timeframe: MarketTimeframe,
+  entry: TimeframeAnalysis,
+  limit: number
+): readonly SwingLevelView[] {
+  const sorted = entry.swings
+    .slice()
+    .sort((left, right) => left.openTime - right.openTime);
+  let previousHigh: number | undefined;
+  let previousLow: number | undefined;
+  const tagged: SwingLevelView[] = sorted.map((swing) => {
+    let structureTag: SwingStructureTag;
+    if (swing.direction === "high") {
+      structureTag = previousHigh === undefined
+        ? "SH"
+        : swing.price > previousHigh
+          ? "HH"
+          : "LH";
+      previousHigh = swing.price;
+    } else {
+      structureTag = previousLow === undefined
+        ? "SL"
+        : swing.price > previousLow
+          ? "HL"
+          : "LL";
+      previousLow = swing.price;
+    }
+    return {
+      id: `${timeframe}:${swing.direction}:${swing.openTime}`,
+      timeframe,
+      direction: swing.direction,
+      structureTag,
+      price: swing.price,
+      openTime: swing.openTime
+    };
+  });
+  return tagged.slice(-limit);
 }
 
 export class LiveMarketAnalysisService {
@@ -151,43 +232,30 @@ export class LiveMarketAnalysisService {
       };
     });
 
-    const fourHour = snapshot.timeframes["4h"];
-    const fourHourTrendlines: FourHourTrendlineView[] = fourHour.trendlineLifecycles
-      .slice()
-      .sort((left, right) => Number(right.isValid) - Number(left.isValid) || right.createdAt - left.createdAt)
-      .slice(0, 6)
-      .map((lifecycle) => {
-        const anchorA = {
-          openTime: lifecycle.pointA.openTime,
-          price: lifecycle.pointA.price
-        };
-        const anchorB = {
-          openTime: lifecycle.pointB.openTime,
-          price: lifecycle.pointB.price
-        };
-        return {
-          id: lifecycle.id,
-          direction: lifecycle.direction,
-          status: lifecycle.isValid ? "valid" : "broken",
-          breakStatus: lifecycle.breakStatus,
-          qualifyingTouchCount: lifecycle.qualifyingTouchCount,
-          anchorA,
-          anchorB,
-          projectedPrice: projectPrice(anchorA, anchorB, snapshot.analysisTime)
-        };
-      });
+    const trendlinesByTimeframe: Partial<Record<MarketTimeframe, readonly FourHourTrendlineView[]>> = {};
+    const swingsByTimeframe: Partial<Record<MarketTimeframe, readonly SwingLevelView[]>> = {};
+    for (const timeframe of ANALYSIS_TIMEFRAMES) {
+      const entry = snapshot.timeframes[timeframe];
+      trendlinesByTimeframe[timeframe] = mapTimeframeTrendlines(timeframe, entry, snapshot.analysisTime);
+      swingsByTimeframe[timeframe] = mapTimeframeSwings(timeframe, entry, 12);
+    }
 
-    const swingLevels: SwingLevelView[] = (["4h", "1h"] as const)
-      .flatMap((timeframe) =>
-        snapshot.timeframes[timeframe].swings.slice(-3).map((swing) => ({
-          id: `${timeframe}:${swing.direction}:${swing.openTime}`,
-          timeframe,
-          direction: swing.direction,
-          price: swing.price,
-          openTime: swing.openTime
-        }))
-      )
-      .slice(-6);
+    const fourHourTrendlines = trendlinesByTimeframe["4h"] ?? [];
+    const swingLevels: SwingLevelView[] = [
+      ...(swingsByTimeframe["4h"] ?? []).slice(-3),
+      ...(swingsByTimeframe["1h"] ?? []).slice(-3)
+    ].slice(-6);
+    const activeOrderBlocks = [
+      ...detectActiveOrderBlocks(snapshot.timeframes["5m"].candles, {
+        maximumZoneAgeCandles: Math.min(180, Math.max(10, snapshot.timeframes["5m"].candles.length - 2))
+      }).map((zone) => ({ ...zone, timeframe: "5m" as const })),
+      ...detectActiveOrderBlocks(snapshot.timeframes["1h"].candles, {
+        maximumZoneAgeCandles: Math.min(120, Math.max(10, snapshot.timeframes["1h"].candles.length - 2))
+      }).map((zone) => ({ ...zone, timeframe: "1h" as const })),
+      ...detectActiveOrderBlocks(snapshot.timeframes["4h"].candles, {
+        maximumZoneAgeCandles: Math.min(80, Math.max(10, snapshot.timeframes["4h"].candles.length - 2))
+      }).map((zone) => ({ ...zone, timeframe: "4h" as const }))
+    ];
 
     const view: MarketAnalysisView = {
       symbol: snapshot.symbol,
@@ -197,7 +265,10 @@ export class LiveMarketAnalysisService {
       signalCandle: snapshot.signalCandle,
       timeframes,
       fourHourTrendlines,
+      trendlinesByTimeframe,
       swingLevels,
+      swingsByTimeframe,
+      activeOrderBlocks,
       evaluations,
       candidates: candidates.map((candidate) => ({
         signalId: candidate.signalId,

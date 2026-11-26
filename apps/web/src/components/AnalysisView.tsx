@@ -1,3 +1,4 @@
+import type { StrategyId } from "@crypto-signal/shared";
 import {
   STRATEGY_META,
   formatPrice,
@@ -16,6 +17,7 @@ interface AnalysisViewProps {
   readonly onRefresh: () => void;
   readonly onPlotTrade: (overlay: ChartTradeOverlay) => void;
   readonly onOpenChartWithAutoLines: () => void;
+  readonly onPreviewStrategy: (strategy: StrategyId) => void;
 }
 
 function regimeClass(regime: "bullish" | "bearish" | "neutral"): string {
@@ -38,7 +40,8 @@ export function AnalysisView({
   compact = false,
   onRefresh,
   onPlotTrade,
-  onOpenChartWithAutoLines
+  onOpenChartWithAutoLines,
+  onPreviewStrategy
 }: AnalysisViewProps) {
   const alignment = analysis ? summarizeTopDownAlignment(analysis.timeframes) : null;
 
@@ -70,7 +73,7 @@ export function AnalysisView({
               className="primary-cta"
               onClick={onOpenChartWithAutoLines}
             >
-              Show 4H Lines on Chart
+              Plot 4H Top-Down
             </button>
           )}
         </div>
@@ -129,11 +132,15 @@ export function AnalysisView({
                           onPlotTrade({
                             label: `${symbol} · ${STRATEGY_META[candidate.strategy].name}`,
                             symbol,
+                            strategy: candidate.strategy,
                             side: candidate.side === "buy" ? "long" : "short",
                             entryPrice: candidate.entryPrice,
                             stopPrice: candidate.stopLoss,
                             target1: candidate.target1,
-                            target2: candidate.target2
+                            target2: candidate.target2,
+                            ...(candidate.chartAnnotations === undefined
+                              ? {}
+                              : { annotations: candidate.chartAnnotations })
                           })
                         }
                       >
@@ -252,6 +259,7 @@ export function AnalysisView({
                           <tr key={swing.id}>
                             <td>{swing.timeframe.toUpperCase()}</td>
                             <td className={swing.direction === "high" ? "tone-bearish" : "tone-bullish"}>
+                              {swing.structureTag ? `${swing.structureTag} · ` : ""}
                               {swing.direction === "high" ? "Swing High" : "Swing Low"}
                             </td>
                             <td>{formatPrice(swing.price)}</td>
@@ -301,6 +309,18 @@ export function AnalysisView({
                         </div>
                       </div>
                     )}
+                    <div className="card-footer-row">
+                      <span className="muted-meta">
+                        {evaluation.relevantTimeframe.toUpperCase()} engine
+                      </span>
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        onClick={() => onPreviewStrategy(evaluation.strategy)}
+                      >
+                        View on Chart
+                      </button>
+                    </div>
                   </article>
                 );
               })}

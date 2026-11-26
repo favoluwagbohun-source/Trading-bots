@@ -3,16 +3,18 @@ import {
   SUPPORTED_TIMEFRAMES,
   type MarketTimeframe
 } from "@crypto-signal/market-data";
-import type { TimeframeSummary } from "./market-api.js";
+import type { ChartAnnotationsView, TimeframeSummary } from "./market-api.js";
 
 export interface ChartTradeOverlay {
   readonly label: string;
   readonly symbol: string;
+  readonly strategy?: StrategyId;
   readonly side: "long" | "short";
   readonly entryPrice: number;
   readonly stopPrice: number;
   readonly target1: number;
   readonly target2: number;
+  readonly annotations?: ChartAnnotationsView;
 }
 
 export interface TopDownSummary {

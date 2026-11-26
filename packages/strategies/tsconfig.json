@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../shared" },
-    { "path": "../indicators" }
+    { "path": "../indicators" },
+    { "path": "../market-data" }
   ]
 }

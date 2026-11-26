@@ -5,15 +5,18 @@ import {
   LineSeries,
   LineStyle,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type IPriceLine,
+  type ISeriesMarkersPluginApi,
   type MouseEventParams,
   type ISeriesApi,
+  type Time,
   type UTCTimestamp
 } from "lightweight-charts";
 import type { Candle } from "@crypto-signal/shared";
+import type { ChartOverlayBundle } from "../chart-overlays.js";
 import type { ChartTradeOverlay } from "../chart-state.js";
-import type { FourHourTrendline, SwingLevel } from "../market-api.js";
 
 interface PriceLevel {
   readonly id: number;
@@ -49,9 +52,7 @@ interface MarketChartProps {
   readonly showTools?: boolean;
   readonly onCloseTools?: () => void;
   readonly dateControls?: ReactNode;
-  readonly autoTrendlines?: readonly FourHourTrendline[];
-  readonly swingLevels?: readonly SwingLevel[];
-  readonly showAutoOverlays?: boolean;
+  readonly overlayBundle: ChartOverlayBundle;
   readonly activeTradeOverlay?: ChartTradeOverlay | null;
   readonly onClearTradeOverlay?: () => void;
 }
@@ -78,15 +79,14 @@ export function MarketChart({
   showTools = false,
   onCloseTools,
   dateControls,
-  autoTrendlines = [],
-  swingLevels = [],
-  showAutoOverlays = false,
+  overlayBundle,
   activeTradeOverlay = null,
   onClearTradeOverlay
 }: MarketChartProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const manualLineRef = useRef<Array<ISeriesApi<"Line">>>([]);
   const autoLineRef = useRef<Array<ISeriesApi<"Line">>>([]);
@@ -164,8 +164,10 @@ export function MarketChart({
       lastValueVisible: false,
       priceLineVisible: false
     });
+    const markersPlugin = createSeriesMarkers(candleSeries, []);
     chartRef.current = chart;
     candlesRef.current = candleSeries;
+    markersRef.current = markersPlugin;
     volumeRef.current = volumeSeries;
 
     const updateSize = () => {
@@ -217,9 +219,11 @@ export function MarketChart({
       resizeObserver.disconnect();
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(updateSize);
       chart.unsubscribeClick(onChartClick);
+      markersPlugin.detach();
       chart.remove();
       chartRef.current = null;
       candlesRef.current = null;
+      markersRef.current = null;
       volumeRef.current = null;
       manualLineRef.current = [];
       autoLineRef.current = [];
@@ -297,24 +301,16 @@ export function MarketChart({
     const series = candlesRef.current;
     if (!chart || !series) return;
     for (const line of autoLineRef.current) chart.removeSeries(line);
-    if (!showAutoOverlays || candles.length === 0) {
+    if (candles.length === 0 || overlayBundle.trendlines.length === 0) {
       autoLineRef.current = [];
       return;
     }
 
     const firstSec = Math.floor(candles[0]!.openTime / 1000);
     const lastSec = Math.floor(candles.at(-1)!.openTime / 1000);
-    let candleLow = Infinity;
-    let candleHigh = -Infinity;
-    for (const c of candles) {
-      const low = Number(c.low);
-      const high = Number(c.high);
-      if (low < candleLow) candleLow = low;
-      if (high > candleHigh) candleHigh = high;
-    }
     const created: Array<ISeriesApi<"Line">> = [];
 
-    for (const item of autoTrendlines.slice(0, 4)) {
+    for (const item of overlayBundle.trendlines) {
       const startSec = Math.floor(item.anchorA.openTime / 1000);
       const endSec = Math.floor(item.anchorB.openTime / 1000);
       if (endSec <= startSec) continue;
@@ -326,32 +322,18 @@ export function MarketChart({
         item.anchorA.price +
         ((item.anchorB.price - item.anchorA.price) * (tSec - startSec)) / (endSec - startSec);
 
-      const startVal = interpolate(clippedStart);
-      const endVal = interpolate(clippedEnd);
-      const lineMin = Math.min(startVal, endVal);
-      const lineMax = Math.max(startVal, endVal);
-      if (
-        Number.isFinite(candleLow) &&
-        Number.isFinite(candleHigh) &&
-        (lineMin > candleHigh * 1.15 || lineMax < candleLow * 0.85)
-      ) {
-        continue;
-      }
-
       const points: { time: UTCTimestamp; value: number }[] = [
-        { time: clippedStart as UTCTimestamp, value: startVal }
+        { time: clippedStart as UTCTimestamp, value: interpolate(clippedStart) }
       ];
       if (endSec > clippedStart && endSec < clippedEnd) {
         points.push({ time: endSec as UTCTimestamp, value: item.anchorB.price });
       }
-      points.push({ time: clippedEnd as UTCTimestamp, value: endVal });
+      points.push({ time: clippedEnd as UTCTimestamp, value: interpolate(clippedEnd) });
 
       const line = chart.addSeries(LineSeries, {
-        color: item.status === "valid"
-          ? (item.direction === "ascending" ? "#0ecb81" : "#f0b90b")
-          : "#596678",
-        lineWidth: item.status === "valid" ? 2 : 1,
-        lineStyle: item.status === "valid" ? LineStyle.Solid : LineStyle.Dashed,
+        color: item.color,
+        lineWidth: item.lineWidth,
+        lineStyle: item.dashed ? LineStyle.Dashed : LineStyle.Solid,
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
@@ -361,7 +343,17 @@ export function MarketChart({
       created.push(line);
     }
     autoLineRef.current = created;
-  }, [autoTrendlines, candles, showAutoOverlays]);
+  }, [candles, overlayBundle.trendlines]);
+
+  useEffect(() => {
+    const markersPlugin = markersRef.current;
+    if (!markersPlugin) return;
+    if (candles.length === 0) {
+      markersPlugin.setMarkers([]);
+      return;
+    }
+    markersPlugin.setMarkers([...overlayBundle.markers]);
+  }, [candles.length, overlayBundle.markers]);
 
   useEffect(() => {
     const series = candlesRef.current;
@@ -378,21 +370,17 @@ export function MarketChart({
       })
     );
 
-    if (showAutoOverlays && !activeTradeOverlay) {
-      for (const swing of swingLevels.slice(-4)) {
-        lines.push(
-          series.createPriceLine({
-            price: swing.price,
-            color: swing.direction === "high"
-              ? "rgba(246, 70, 93, 0.55)"
-              : "rgba(14, 203, 129, 0.55)",
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            axisLabelVisible: true,
-            title: `${swing.timeframe.toUpperCase()} ${swing.direction === "high" ? "SH" : "SL"}`
-          })
-        );
-      }
+    for (const lvl of overlayBundle.levels) {
+      lines.push(
+        series.createPriceLine({
+          price: lvl.price,
+          color: lvl.color,
+          lineWidth: 1,
+          lineStyle: lvl.dashed ? LineStyle.Dotted : LineStyle.Solid,
+          axisLabelVisible: true,
+          title: lvl.label
+        })
+      );
     }
 
     const activePlan = activeTradeOverlay
@@ -445,7 +433,7 @@ export function MarketChart({
       );
     }
     priceLinesRef.current = lines;
-  }, [activeTradeOverlay, levels, showAutoOverlays, swingLevels, tradePlan]);
+  }, [activeTradeOverlay, levels, overlayBundle.levels, tradePlan]);
 
   const zoneBoxes = zones.map((zone) => {
     const chart = chartRef.current;
@@ -466,6 +454,52 @@ export function MarketChart({
           top: Math.min(top, bottom),
           width: Math.max(0, right - left),
           height: Math.abs(bottom - top)
+        }}
+      />
+    );
+  });
+
+  const autoZoneBoxes = overlayBundle.zones.map((zone) => {
+    const chart = chartRef.current;
+    const series = candlesRef.current;
+    if (!chart || !series || candles.length === 0) return null;
+    const top = series.priceToCoordinate(zone.high);
+    const bottom = series.priceToCoordinate(zone.low);
+    const startX = chart.timeScale().timeToCoordinate(candleTime(zone.startTime));
+    if (top === null || bottom === null) return null;
+    const left = Math.max(0, startX ?? 0);
+    const right = Math.max(left, (hostRef.current?.clientWidth ?? 0) - 92);
+    return (
+      <div
+        className={`chart-zone chart-zone-${zone.direction} chart-zone-auto`}
+        key={zone.id}
+        style={{
+          left,
+          top: Math.min(top, bottom),
+          width: Math.max(0, right - left),
+          height: Math.max(6, Math.abs(bottom - top))
+        }}
+      >
+        <span className="chart-zone-tag">{zone.label}</span>
+      </div>
+    );
+  });
+
+  const touchDotNodes = overlayBundle.touchDots.map((dot) => {
+    const chart = chartRef.current;
+    const series = candlesRef.current;
+    if (!chart || !series) return null;
+    const x = chart.timeScale().timeToCoordinate(candleTime(dot.openTime));
+    const y = series.priceToCoordinate(dot.price);
+    if (x === null || y === null) return null;
+    return (
+      <div
+        className="chart-touch-dot"
+        key={dot.id}
+        style={{
+          left: x,
+          top: y,
+          borderColor: dot.color
         }}
       />
     );
@@ -709,9 +743,26 @@ export function MarketChart({
       {chartError && <p className="chart-message" role="status">{chartError}</p>}
 
       <div className="chart-viewport">
+        {overlayBundle.legend && (
+          <div className="chart-ta-legend" aria-label="Technical analysis legend">
+            <span className="chart-ta-legend-title">{overlayBundle.legend}</span>
+            {overlayBundle.legendItems.length > 0 && (
+              <span className="chart-ta-legend-items">
+                {overlayBundle.legendItems.map((item) => (
+                  <span className="chart-ta-legend-chip" key={item.label}>
+                    <span className="chart-ta-swatch" style={{ background: item.color }} aria-hidden="true" />
+                    {item.label}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+        )}
         <div ref={hostRef} className="chart-host" />
         <div className="chart-zone-layer" aria-hidden="true" key={layoutVersion}>
           {zoneBoxes}
+          {autoZoneBoxes}
+          {touchDotNodes}
         </div>
         {candles.length === 0 && (
           <div className="chart-empty">
