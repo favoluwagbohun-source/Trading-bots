@@ -23,4 +23,6 @@ services:
         value: "0.001"
       - key: HEARTBEAT_ENABLED
         value: "true"
+      - key: TELEGRAM_DEFAULT_CHAT_ID
+        sync: false
 

@@ -99,6 +99,39 @@ describe("Telegram chat commands", () => {
     expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Win rate: 50.0%");
   });
 
+  it("reports quantitative consistency signals on /quant and respects pause state", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const commands = new TelegramCommandService({ sendMessage }, {
+      getQuantSignals: () => [
+        {
+          id: "BTCUSDT:1h:1700000000000:buy",
+          timestamp: 1_700_003_599_999,
+          symbol: "BTCUSDT",
+          timeframe: "1h",
+          strategy: "break_and_retest",
+          side: "buy",
+          entryPrice: 95000,
+          stopLoss: 94200,
+          target1: 96200,
+          target2: 97000,
+          riskRewardRatio: 2.0,
+          consistencyScore: 84,
+          expectancyScore: 1.52,
+          confidence: "moderate",
+          rationale: "Deterministic quantitative momentum confirmation on 1h."
+        }
+      ]
+    });
+
+    await commands.handleMessage({ chat: { id: 12 }, text: "/quant" });
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("BTCUSDT (1H) — BUY");
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Consistency: 84%");
+
+    await commands.handleMessage({ chat: { id: 12 }, text: "/pause" });
+    await commands.handleMessage({ chat: { id: 12 }, text: "/quant" });
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("delivery is paused");
+  });
+
   it("rejects insecure Telegram Mini App URLs", () => {
     const sendMessage = vi.fn(async () => undefined);
     expect(() => new TelegramCommandService({ sendMessage }, {

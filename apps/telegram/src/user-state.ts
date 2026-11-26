@@ -16,6 +16,7 @@ export interface TelegramUserState {
   readonly awaitingAccount: boolean;
   readonly paused: boolean;
   readonly paperTradingEnabled: boolean;
+  readonly signalAlertsEnabled: boolean;
   readonly enabledStrategies: readonly StrategyId[];
 }
 
@@ -24,6 +25,7 @@ interface MutableTelegramUserState {
   awaitingAccount: boolean;
   paused: boolean;
   paperTradingEnabled: boolean;
+  signalAlertsEnabled: boolean;
   enabledStrategies: Set<StrategyId>;
 }
 
@@ -32,6 +34,7 @@ interface PersistedTelegramUserState {
   readonly awaitingAccount: boolean;
   readonly paused: boolean;
   readonly paperTradingEnabled: boolean;
+  readonly signalAlertsEnabled?: boolean;
   readonly enabledStrategies: readonly StrategyId[];
 }
 
@@ -74,8 +77,17 @@ export class TelegramUserStateStore {
       awaitingAccount: user.awaitingAccount,
       paused: user.paused,
       paperTradingEnabled: user.paperTradingEnabled,
+      signalAlertsEnabled: user.signalAlertsEnabled,
       enabledStrategies: Object.freeze([...user.enabledStrategies])
     });
+  }
+
+  ensureRegistered(chatId: number): TelegramUserState {
+    if (!Number.isSafeInteger(chatId)) throw new Error("Telegram chat ID must be an integer");
+    if (!this.users.has(chatId)) {
+      this.updateUser(chatId, () => {});
+    }
+    return this.get(chatId);
   }
 
   listUsers(): readonly { readonly chatId: number; readonly state: TelegramUserState }[] {
@@ -113,6 +125,12 @@ export class TelegramUserStateStore {
     }
     this.updateUser(chatId, (user) => {
       user.paperTradingEnabled = enabled;
+    });
+  }
+
+  setSignalAlertsEnabled(chatId: number, enabled: boolean): void {
+    this.updateUser(chatId, (user) => {
+      user.signalAlertsEnabled = enabled;
     });
   }
 
@@ -188,6 +206,8 @@ export class TelegramUserStateStore {
         typeof persisted.paused !== "boolean" ||
         (persisted.paperTradingEnabled !== undefined &&
           typeof persisted.paperTradingEnabled !== "boolean") ||
+        (persisted.signalAlertsEnabled !== undefined &&
+          typeof persisted.signalAlertsEnabled !== "boolean") ||
         !Array.isArray(persisted.enabledStrategies) ||
         !persisted.enabledStrategies.every(isStrategyId)
       ) {
@@ -198,6 +218,7 @@ export class TelegramUserStateStore {
         awaitingAccount: persisted.awaitingAccount,
         paused: persisted.paused,
         paperTradingEnabled: persisted.paperTradingEnabled === true,
+        signalAlertsEnabled: persisted.signalAlertsEnabled !== false,
         enabledStrategies: new Set(persisted.enabledStrategies)
       });
     }
@@ -221,6 +242,7 @@ export class TelegramUserStateStore {
         awaitingAccount: user.awaitingAccount,
         paused: user.paused,
         paperTradingEnabled: user.paperTradingEnabled,
+        signalAlertsEnabled: user.signalAlertsEnabled,
         enabledStrategies: [...user.enabledStrategies]
       };
     }
@@ -274,6 +296,7 @@ export class TelegramUserStateStore {
         awaitingAccount: false,
         paused: false,
         paperTradingEnabled: false,
+        signalAlertsEnabled: true,
         enabledStrategies: new Set(STRATEGY_IDS)
       };
       this.users.set(chatId, user);

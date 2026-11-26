@@ -6,10 +6,11 @@ import {
 } from "./telegram-api.js";
 
 const BOT_COMMANDS: readonly TelegramBotCommand[] = [
-  { command: "start", description: "Set up your simulated account" },
+  { command: "start", description: "Enable live signals & simulated account" },
+  { command: "quant", description: "View latest quantitative consistency signals" },
+  { command: "signals", description: "View active paper & live signals" },
   { command: "account", description: "Set or update simulated account size" },
   { command: "balance", description: "View balance and fixed 1% risk budget" },
-  { command: "signals", description: "View active paper signals" },
   { command: "performance", description: "View recorded paper-trade results" },
   { command: "strategies", description: "View independent strategy status" },
   { command: "settings", description: "Configure per-chat strategy preferences" },

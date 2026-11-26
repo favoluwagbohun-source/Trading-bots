@@ -179,30 +179,42 @@ export function scoreSignalQuality(
     const volumeRatio = referenceVolume > 0 ? signalVolume / referenceVolume : 0;
     factors.push(factor(
       "volume",
-      Math.min(volumeRatio / 2, 1) * 10,
+      Math.min(volumeRatio / 1.2, 1) * 10,
       10,
-      `Signal volume is ${volumeRatio.toFixed(2)}× the prior-candle median; points reach the cap at 2×.`
+      `Signal volume is ${volumeRatio.toFixed(2)}× the prior-candle median; points reach the cap at 1.2×.`
     ));
   }
 
   const bodyToRange = Math.abs(close - open) / range;
+  const directionalBody = (candidate.side === "buy" ? close >= open : close <= open)
+    ? bodyToRange
+    : bodyToRange * 0.35;
+  const directionalWick = candidate.side === "buy"
+    ? (Math.min(open, close) - low) / range
+    : (high - Math.max(open, close)) / range;
+  const candleQualityRatio = Math.min(1, directionalBody + directionalWick * 0.9);
   factors.push(factor(
     "candle_quality",
-    bodyToRange * 10,
+    candleQualityRatio * 10,
     10,
-    `Candle body is ${Math.round(bodyToRange * 100)}% of its high-low range.`
+    `Candle directional body/rejection wick captures ${Math.round(candleQualityRatio * 100)}% of its high-low range.`
   ));
 
   const swings = findConfirmedSwings(candles, { leftBars: 2, rightBars: 2 });
   const regime = classifyMarketStructure(candles, swings).regime;
+  const alignedRegime = (regime === "bullish") === (candidate.side === "buy");
   const regimePoints = regime === "neutral"
-    ? 5
-    : (regime === "bullish") === (candidate.side === "buy") ? 10 : 0;
+    ? 7
+    : alignedRegime
+      ? 10
+      : candidate.strategy === "liquidity_sweep_reversal"
+        ? 7
+        : 3;
   factors.push(factor(
     "market_regime",
     regimePoints,
     10,
-    `Closed-candle market structure is ${regime}; aligned = 10, neutral = 5, opposed = 0.`
+    `Closed-candle market structure is ${regime} (${regimePoints}/10 for ${candidate.strategy}).`
   ));
 
   const risk = candidate.side === "buy"
@@ -217,9 +229,9 @@ export function scoreSignalQuality(
   const rewardRisk = reward / risk;
   factors.push(factor(
     "risk_reward",
-    Math.min(rewardRisk / 4, 1) * 10,
+    Math.min(rewardRisk / 3, 1) * 10,
     10,
-    `Geometric TP2 reward/risk is ${rewardRisk.toFixed(2)}R; points reach the cap at 4R.`
+    `Geometric TP2 reward/risk is ${rewardRisk.toFixed(2)}R; points reach the cap at 3R.`
   ));
 
   const availablePoints = factors.reduce((sum, item) => sum + item.maximumPoints, 0);

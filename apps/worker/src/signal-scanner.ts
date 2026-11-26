@@ -18,6 +18,10 @@ export interface SignalScannerOptions {
   readonly onCandidate: (candidate: SignalCandidate) => void | Promise<void>;
   readonly onError: (symbol: string, error: unknown) => void;
   readonly onCandles?: (symbol: string, candles: readonly Candle[]) => void | Promise<void>;
+  readonly onDatasets?: (
+    symbol: string,
+    datasets: ReadonlyMap<MarketTimeframe, readonly Candle[]>
+  ) => void | Promise<void>;
   readonly onMarketDataSuccess?: (symbol: string) => void;
   readonly onScanStart?: () => void;
   readonly onScanComplete?: (summary: {
@@ -105,6 +109,9 @@ export class SignalScanner {
         }
         if (this.options.onCandles) {
           await this.options.onCandles(symbol, datasets.get("5m")!);
+        }
+        if (this.options.onDatasets) {
+          await this.options.onDatasets(symbol, datasets);
         }
         const analysis = this.analysis.analyze(symbol, datasets);
         for (const candidate of analysis?.candidates ?? []) {

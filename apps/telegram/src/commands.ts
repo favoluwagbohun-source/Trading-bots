@@ -25,6 +25,38 @@ const STRATEGIES: readonly {
   { id: "order_block_retest", name: "Order Block Retest", note: "Independent prototype" }
 ];
 
+export interface QuantSignalSummary {
+  readonly id: string;
+  readonly timestamp: number;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly strategy: StrategyId;
+  readonly side: "buy" | "sell";
+  readonly entryPrice: number;
+  readonly stopLoss: number;
+  readonly target1: number;
+  readonly target2: number;
+  readonly riskRewardRatio: number;
+  readonly consistencyScore: number;
+  readonly expectancyScore: number;
+  readonly confidence: "high" | "moderate" | "low";
+  readonly rationale: string;
+}
+
+export interface LiveSignalSummary {
+  readonly signalId: string;
+  readonly symbol: string;
+  readonly strategy: StrategyId;
+  readonly side: "buy" | "sell";
+  readonly entryPrice: number;
+  readonly stopLoss: number;
+  readonly target1: number;
+  readonly target2: number;
+  readonly score: number;
+  readonly grade: string;
+  readonly closeTime: number;
+}
+
 export interface TelegramCommandOptions {
   readonly webAppUrl?: string;
   readonly states?: TelegramUserStateStore;
@@ -47,6 +79,8 @@ export interface TelegramCommandOptions {
     readonly realizedPnl: number;
     readonly winRatePercent: number;
   };
+  readonly getQuantSignals?: () => readonly QuantSignalSummary[];
+  readonly getLiveSignals?: () => readonly LiveSignalSummary[];
 }
 
 function parseAccountAmount(value: string): number | undefined {
@@ -80,6 +114,8 @@ export class TelegramCommandService {
     this.getPaperEquity = options.getPaperEquity;
     this.getActivePaperTrades = options.getActivePaperTrades;
     this.getPaperPerformance = options.getPaperPerformance;
+    this.getQuantSignals = options.getQuantSignals;
+    this.getLiveSignals = options.getLiveSignals;
     if (this.webAppUrl !== undefined) {
       let url: URL;
       try {
@@ -97,11 +133,14 @@ export class TelegramCommandService {
   private readonly getPaperEquity: TelegramCommandOptions["getPaperEquity"];
   private readonly getActivePaperTrades: TelegramCommandOptions["getActivePaperTrades"];
   private readonly getPaperPerformance: TelegramCommandOptions["getPaperPerformance"];
+  private readonly getQuantSignals: TelegramCommandOptions["getQuantSignals"];
+  private readonly getLiveSignals: TelegramCommandOptions["getLiveSignals"];
 
   async handleMessage(message: TelegramMessage): Promise<void> {
     const chatId = message.chat.id;
     const text = message.text?.trim();
     if (!text) return;
+    this.states.ensureRegistered(chatId);
 
     const [rawCommand, ...args] = text.split(/\s+/);
     if (!rawCommand?.startsWith("/")) {
@@ -124,6 +163,9 @@ export class TelegramCommandService {
         break;
       case "/signals":
         await this.signals(chatId);
+        break;
+      case "/quant":
+        await this.quant(chatId);
         break;
       case "/performance":
         await this.performance(chatId);
@@ -154,14 +196,14 @@ export class TelegramCommandService {
       this.states.setAwaitingAccount(chatId, true);
       await this.send(
         chatId,
-        "Welcome. Reply with your simulated account size in USD (for example, 1000). Minimum $10. No real orders are placed.",
+        "Welcome! Live strategy & quantitative signal alerts are active for this chat (use /quant or /signals anytime). To also track simulated paper trades, reply with your simulated account size in USD (for example, 1000). Minimum $10. No real orders are placed.",
         this.webAppKeyboard()
       );
       return;
     }
     await this.send(
       chatId,
-      `Welcome back. Simulated account: ${formatCurrency(state.accountEquity)}. Commands: /account, /balance, /signals, /performance, /strategies, /settings, /paper, /pause, /resume.`,
+      `Welcome back. Live signal alerts: ${state.paused ? "paused" : "active"}. Simulated account: ${formatCurrency(state.accountEquity)}. Commands: /quant, /signals, /account, /balance, /performance, /strategies, /settings, /paper, /pause, /resume.`,
       this.webAppKeyboard()
     );
   }
@@ -220,14 +262,63 @@ export class TelegramCommandService {
       return;
     }
     const activeTrades = this.getActivePaperTrades?.(chatId) ?? [];
+    const liveSignals = (this.getLiveSignals?.() ?? []).filter((signal) =>
+      state.enabledStrategies.includes(signal.strategy)
+    );
+    const quantSignals = (this.getQuantSignals?.() ?? []).filter((signal) =>
+      state.enabledStrategies.includes(signal.strategy)
+    );
+
+    const sections: string[] = [];
     if (activeTrades.length === 0) {
-      await this.send(chatId, "No active paper signals are currently tracked for this chat.");
+      sections.push("No active paper signals are currently tracked for this chat.");
+    } else {
+      const descriptions = activeTrades.map((trade) =>
+        `${trade.symbol} ${trade.side.toUpperCase()} · ${trade.strategy.replaceAll("_", " ")} · entry ${trade.entryPrice} · current stop ${trade.stopPrice}`
+      );
+      sections.push(`Active paper signals:\n${descriptions.join("\n")}`);
+    }
+
+    if (liveSignals.length > 0) {
+      const lines = liveSignals.slice(0, 5).map((signal) =>
+        `${signal.symbol} ${signal.side.toUpperCase()} · ${signal.strategy.replaceAll("_", " ")} · Entry ${signal.entryPrice} · SL ${signal.stopLoss} · TP1 ${signal.target1} · TP2 ${signal.target2} (${signal.score}/100 Grade ${signal.grade})`
+      );
+      sections.push(`Recent live strategy signals:\n${lines.join("\n")}`);
+    }
+
+    if (quantSignals.length > 0) {
+      const lines = quantSignals.slice(0, 5).map((signal) =>
+        `${signal.symbol} (${signal.timeframe.toUpperCase()}) ${signal.side.toUpperCase()} · Entry ${signal.entryPrice} · SL ${signal.stopLoss} · TP1 ${signal.target1} · TP2 ${signal.target2} · Consistency ${signal.consistencyScore}% (${signal.expectancyScore}R)`
+      );
+      sections.push(`Latest quantitative signals (/quant):\n${lines.join("\n")}`);
+    }
+
+    await this.send(chatId, sections.join("\n\n"));
+  }
+
+  private async quant(chatId: number): Promise<void> {
+    const state = this.states.get(chatId);
+    if (state.paused) {
+      await this.send(chatId, "Signal delivery is paused for this chat. Use /resume to re-enable it.");
       return;
     }
-    const descriptions = activeTrades.map((trade) =>
-      `${trade.symbol} ${trade.side.toUpperCase()} · ${trade.strategy.replaceAll("_", " ")} · entry ${trade.entryPrice} · current stop ${trade.stopPrice}`
+    const quantSignals = (this.getQuantSignals?.() ?? []).filter((signal) =>
+      state.enabledStrategies.includes(signal.strategy)
     );
-    await this.send(chatId, `Active paper signals:\n${descriptions.join("\n")}`);
+    if (quantSignals.length === 0) {
+      await this.send(
+        chatId,
+        "No active quantitative signals matched the volatility and multi-timeframe filters on the latest scan."
+      );
+      return;
+    }
+    const formatted = quantSignals.slice(0, 5).map((signal) => [
+      `${signal.symbol} (${signal.timeframe.toUpperCase()}) — ${signal.side.toUpperCase()} [${signal.confidence.toUpperCase()}]`,
+      `Strategy: ${signal.strategy.replaceAll("_", " ")} | Consistency: ${signal.consistencyScore}% | Expectancy: ${signal.expectancyScore}R`,
+      `Entry: ${signal.entryPrice} | SL: ${signal.stopLoss} | TP1: ${signal.target1} | TP2: ${signal.target2}`,
+      signal.rationale
+    ].join("\n"));
+    await this.send(chatId, `Quantitative Consistency Signals:\n\n${formatted.join("\n\n")}`);
   }
 
   private async performance(chatId: number): Promise<void> {

@@ -82,6 +82,19 @@ describe("TelegramUserStateStore persistence", () => {
     expect(states.get(8).paperTradingEnabled).toBe(false);
   });
 
+  it("persists registered chats immediately via ensureRegistered with signal alerts enabled", () => {
+    const filePath = createStatePath();
+    const first = new TelegramUserStateStore({ filePath });
+    const state = first.ensureRegistered(9001);
+
+    expect(state.signalAlertsEnabled).toBe(true);
+    expect(state.paperTradingEnabled).toBe(false);
+
+    const reloaded = new TelegramUserStateStore({ filePath });
+    expect(reloaded.listUsers().map(({ chatId }) => chatId)).toEqual([9001]);
+    expect(reloaded.get(9001).signalAlertsEnabled).toBe(true);
+  });
+
   it("fails explicitly on invalid JSON instead of silently resetting users", () => {
     const filePath = createStatePath();
     writeFileSync(filePath, "{invalid");

@@ -88,6 +88,47 @@ describe("scoreSignalQuality", () => {
     expect(validated.publishEligible).toBe(true);
   });
 
+  it("scores realistic 3R liquidity sweep pinbar setups as Grade B+ when evidence is provided", () => {
+    const base = candidate();
+    const sweepCandles: Candle[] = base.chartCandles.map((candle, index) => {
+      if (index !== base.chartCandles.length - 1) return candle;
+      return {
+        ...candle,
+        open: "123.4",
+        high: "124.0",
+        low: "121.0",
+        close: "123.9",
+        volume: "10"
+      };
+    });
+    const signalCandle = sweepCandles.at(-1)!;
+    const sweepCandidate: SignalCandidate = {
+      ...base,
+      signalId: "BTCUSDT:liquidity_sweep_reversal:1800000",
+      strategy: "liquidity_sweep_reversal",
+      higherTimeframeBias: "not applicable",
+      signalCandle,
+      entryPrice: 124,
+      stopLoss: 121,
+      target1: 128.5,
+      target2: 133,
+      chartCandles: sweepCandles,
+      chartAnnotations: {
+        levels: [{ label: "Reference level", price: 121.5 }],
+        zones: []
+      }
+    };
+
+    const validated = scoreSignalQuality(sweepCandidate, {
+      maximumSupportedGrade: "A",
+      source: "deterministic-engine-v1"
+    });
+
+    expect(validated.score).toBeGreaterThanOrEqual(80);
+    expect(["A", "B"]).toContain(validated.strategyGrade);
+    expect(validated.publishEligible).toBe(true);
+  });
+
   it("rejects a score when the chart snapshot or signal candle is not closed", () => {
     const current = candidate();
     expect(() => scoreSignalQuality({

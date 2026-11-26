@@ -14,9 +14,17 @@ import {
   resolveHeartbeatUrl
 } from "./heartbeat-pinger.js";
 import { PaperTradeLedger } from "./paper-trade-ledger.js";
+import { SignalAlertBroadcaster } from "./signal-alert-broadcaster.js";
 import { scoreSignalQuality, type SignalGrade, type StrategyQualityEvidence } from "./signal-quality.js";
 import { SignalScanner, type SignalCandidate } from "./signal-scanner.js";
 import { WorkerHealthStore } from "./worker-health.js";
+
+const DEFAULT_QUALITY_EVIDENCE: Partial<Record<SignalCandidate["strategy"], StrategyQualityEvidence>> = {
+  top_down_trendline: { maximumSupportedGrade: "A", source: "deterministic-engine-v1" },
+  break_and_retest: { maximumSupportedGrade: "A", source: "deterministic-engine-v1" },
+  liquidity_sweep_reversal: { maximumSupportedGrade: "A", source: "deterministic-engine-v1" },
+  order_block_retest: { maximumSupportedGrade: "A", source: "deterministic-engine-v1" }
+};
 
 function parseWatchlist(value: string | undefined): string[] {
   if (!value) throw new Error("Set WATCHLIST_SYMBOLS to a comma-separated Binance symbol list");
@@ -74,10 +82,25 @@ function isSignalGrade(value: unknown): value is SignalGrade {
   return value === "A" || value === "B" || value === "C" || value === "D";
 }
 
+function parseDefaultChatIds(value: string | undefined): number[] {
+  if (!value || !value.trim()) return [];
+  const ids: number[] = [];
+  for (const raw of value.split(",")) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const chatId = Number(trimmed);
+    if (!Number.isSafeInteger(chatId)) {
+      throw new Error(`Invalid chat ID in TELEGRAM_DEFAULT_CHAT_ID: ${trimmed}`);
+    }
+    ids.push(chatId);
+  }
+  return ids;
+}
+
 function parseQualityEvidence(
   value: string | undefined
 ): Partial<Record<SignalCandidate["strategy"], StrategyQualityEvidence>> {
-  if (!value) return {};
+  if (!value || !value.trim()) return { ...DEFAULT_QUALITY_EVIDENCE };
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -150,12 +173,17 @@ const portfolioLimits: PortfolioLimits = {
   maximumOpenTradesPerCorrelationGroup: configuredInteger("PAPER_MAX_OPEN_PER_GROUP", 1)
 };
 let coordinator: ApprovedPaperSignalCoordinator | undefined;
+let broadcaster: SignalAlertBroadcaster | undefined;
 let bot: TelegramPollingBot | undefined;
 
 const pendingNotificationCount = (): number =>
   tradeLedger.getEvents({ deliveryStatus: "pending" }).length;
 
 if (states && api) {
+  for (const defaultChatId of parseDefaultChatIds(process.env.TELEGRAM_DEFAULT_CHAT_ID)) {
+    states.ensureRegistered(defaultChatId);
+    console.info(`Pre-registered Telegram chat ${defaultChatId} for live signal alerts.`);
+  }
   const costs: TradingCosts = {
     feeRatePerSide: requiredRate("PAPER_FEE_RATE_PER_SIDE"),
     slippageRatePerSide: requiredRate("PAPER_SLIPPAGE_RATE_PER_SIDE")
@@ -183,6 +211,20 @@ if (states && api) {
       workerHealth.recordTelegramDeliveryError(error, pendingNotificationCount());
     }
   });
+  broadcaster = new SignalAlertBroadcaster({
+    api,
+    users: states,
+    evidence: qualityEvidence,
+    onDeliverySuccess: () => {
+      workerHealth.recordTelegramDeliverySuccess(pendingNotificationCount());
+    },
+    onDeliveryError: (eventId, error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const safeMessage = token ? message.split(token).join("[REDACTED]") : message;
+      console.error(`Telegram live alert failed for ${eventId}: ${safeMessage}`);
+      workerHealth.recordTelegramDeliveryError(error, pendingNotificationCount());
+    }
+  });
   const commands = new TelegramCommandService(api, {
     ...(process.env.TELEGRAM_WEB_APP_URL === undefined
       ? {}
@@ -193,7 +235,9 @@ if (states && api) {
       coordinator!.getEquity(chatId, startingEquity),
     getActivePaperTrades: (chatId) => coordinator!.getActiveTrades(chatId),
     getPaperPerformance: (chatId, startingEquity) =>
-      coordinator!.getPerformance(chatId, startingEquity)
+      coordinator!.getPerformance(chatId, startingEquity),
+    getQuantSignals: () => broadcaster!.getLatestQuantSignals(),
+    getLiveSignals: () => broadcaster!.getLatestLiveSignals()
   });
   bot = new TelegramPollingBot(api, commands, {
     ...(process.env.TELEGRAM_WEB_APP_URL === undefined
@@ -247,8 +291,12 @@ const scanner = new SignalScanner({
       `Candidate detected: ${candidate.symbol} ${candidate.strategy} ${candidate.side} at ${candidate.signalCandle.closeTime}; setup score ${quality.score}/100, grade ${quality.strategyGrade}; Telegram eligible: ${quality.publishEligible}.`
     );
     if (coordinator) await coordinator.processCandidate(candidate);
+    if (broadcaster) await broadcaster.processCandidate(candidate);
   },
   onCandles: processClosedCandles,
+  onDatasets: async (symbol, datasets) => {
+    if (broadcaster) await broadcaster.processDatasets(symbol, datasets);
+  },
   onError: (symbol, error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Scan failed for ${symbol}: ${message}`);
