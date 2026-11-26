@@ -51,6 +51,7 @@ export interface SignalCandidate {
 export interface ChartAnnotations {
   readonly trendline?: {
     readonly id: string;
+    readonly qualifyingTouchCount: number;
     readonly anchorA: { readonly openTime: number; readonly price: number };
     readonly anchorB: { readonly openTime: number; readonly price: number };
   };
@@ -203,6 +204,7 @@ function createCandidates(
         ...(trendline === undefined ? {} : {
           trendline: {
             id: trendline.id,
+            qualifyingTouchCount: trendline.qualifyingTouchCount,
             anchorA: { openTime: trendline.anchorA.openTime, price: trendline.anchorA.price },
             anchorB: { openTime: trendline.anchorB.openTime, price: trendline.anchorB.price }
           }

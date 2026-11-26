@@ -1,4 +1,5 @@
 import { BinanceRestClient } from "@crypto-signal/market-data";
+import { scoreSignalQuality } from "./signal-quality.js";
 import { SignalScanner } from "./signal-scanner.js";
 
 function parseWatchlist(value: string | undefined): string[] {
@@ -21,8 +22,9 @@ const scanner = new SignalScanner({
   client: new BinanceRestClient(),
   scanIntervalMs: parseScanInterval(process.env.SCAN_INTERVAL_MS),
   onCandidate: (candidate) => {
+    const quality = scoreSignalQuality(candidate);
     console.info(
-      `Candidate detected: ${candidate.symbol} ${candidate.strategy} ${candidate.side} at ${candidate.signalCandle.closeTime}; awaiting downstream publication gates.`
+      `Candidate detected: ${candidate.symbol} ${candidate.strategy} ${candidate.side} at ${candidate.signalCandle.closeTime}; setup score ${quality.score}/100, grade ${quality.strategyGrade}; Telegram eligible: ${quality.publishEligible}.`
     );
   },
   onError: (symbol, error) => {

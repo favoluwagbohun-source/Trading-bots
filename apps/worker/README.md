@@ -18,6 +18,15 @@ fee/slippage-adjusted position sizing, the fixed 1% account-risk budget, and
 configured portfolio limits. Call `confirmPublished` only after a paper signal
 has actually been delivered. This preflight is not yet wired into Telegram.
 
+`scoreSignalQuality` explains its score across higher-timeframe alignment (20),
+trendline validity (15), entry confirmation (15), structural confluence (10),
+volume (10), candle quality (10), market regime (10), and geometric TP2 R:R
+(10). Factors that do not apply to a strategy are excluded and the result is
+normalized over applicable points. The score is a setup rubric, not a win
+probability. Grade bands are A (90+), B (80+), C (65+), and D (below 65).
+Without cited strategy-validation evidence, the grade is capped at C and cannot
+pass the Telegram publication gate.
+
 Publication remains gated until the scanner, risk gate, quality grading,
 durable paper-trade tracking, and matching chart image are connected end to end.
 Scanner de-duplication, portfolio state, and Telegram user settings are currently
