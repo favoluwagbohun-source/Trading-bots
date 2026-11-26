@@ -109,3 +109,11 @@ execution of validation against licensed, timestamped historical data and
 ongoing live paper results. The repository has no such reviewable dataset, so
 no market-performance claims are made. Synthetic test fixtures verify
 deterministic behavior only.
+
+The worker now has a paginated Binance Spot history downloader for BTCUSDT
+and BTCUSDC, synchronized across `1M`, `1w`, `1d`, `4h`, `1h`, and `5m`.
+Historical pages stream to locally ignored JSONL files with a coverage
+manifest. Binance's public API returns occasional zero-duration, zero-volume
+rows for empty intervals; those rows are explicitly warned about, excluded
+rather than synthesized, and counted in the manifest. Requested periods
+before a symbol's listing naturally have no candles.

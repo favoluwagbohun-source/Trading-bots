@@ -51,6 +51,103 @@ describe("Binance REST client", () => {
     expect(candles[0]?.closed).toBe(false);
   });
 
+  it("streams a requested historical range in bounded, non-overlapping pages", async () => {
+    const rows = [
+      [100, "100", "101", "99", "100", "1", 199, "1", 1, "1", "1", "0"],
+      [200, "100", "101", "99", "100", "1", 299, "1", 1, "1", "1", "0"],
+      [300, "100", "101", "99", "100", "1", 399, "1", 1, "1", "1", "0"]
+    ];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const startTime = Number(url.searchParams.get("startTime"));
+      const limit = Number(url.searchParams.get("limit"));
+      const page = rows.filter((row) => Number(row[0]) >= startTime).slice(0, limit);
+      return new Response(JSON.stringify(page), { status: 200 });
+    });
+    const client = new BinanceRestClient(["https://data-api.binance.vision"], fetchImpl);
+    const pages = [];
+    for await (const page of client.iterateHistoricalKlines({
+      symbol: "BTCUSDT",
+      timeframe: "5m",
+      startTime: 100,
+      endTime: 300,
+      limit: 2,
+      pageDelayMs: 0
+    })) {
+      pages.push(page.map(({ openTime }) => openTime));
+    }
+
+    expect(pages).toEqual([[100, 200], [300]]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips and counts only Binance zero-duration, zero-volume empty candles", async () => {
+    const emptyRow = [
+      100, "100", "100", "100", "100", "0", 100, "0", 0, "0", "0", "0"
+    ];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const client = new BinanceRestClient(
+      ["https://data-api.binance.vision"],
+      async () => new Response(JSON.stringify([emptyRow]), { status: 200 })
+    );
+    try {
+      await expect(client.getHistoricalKlines({
+        symbol: "BTCUSDT",
+        timeframe: "5m",
+        limit: 1
+      })).resolves.toEqual([]);
+      expect(client.skippedNoTradeCandleCount).toBe(1);
+      expect(warn).toHaveBeenCalledWith(
+        "Skipping Binance zero-duration zero-volume candle at 100"
+      );
+
+      const pages = [];
+      const rangeClient = new BinanceRestClient(
+        ["https://data-api.binance.vision"],
+        async (input: RequestInfo | URL) => {
+          const url = new URL(String(input));
+          const startTime = Number(url.searchParams.get("startTime"));
+          const page = startTime <= 100
+            ? [emptyRow, [
+                200, "100", "101", "99", "100", "1", 299, "1", 1, "1", "1", "0"
+              ]]
+            : [[
+                300, "100", "101", "99", "100", "1", 399, "1", 1, "1", "1", "0"
+              ]];
+          return new Response(JSON.stringify(page), { status: 200 });
+        }
+      );
+      for await (const page of rangeClient.iterateHistoricalKlines({
+        symbol: "BTCUSDT",
+        timeframe: "5m",
+        startTime: 100,
+        endTime: 300,
+        limit: 2,
+        pageDelayMs: 0
+      })) {
+        pages.push(page.map(({ openTime }) => openTime));
+      }
+      expect(pages).toEqual([[200], [300]]);
+      expect(rangeClient.skippedNoTradeCandleCount).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("rejects invalid historical range arguments before requesting Binance", async () => {
+    const fetchImpl = vi.fn();
+    const client = new BinanceRestClient(["https://data-api.binance.vision"], fetchImpl);
+    const iterator = client.iterateHistoricalKlines({
+      symbol: "BTCUSDT",
+      timeframe: "5m",
+      startTime: 300,
+      endTime: 100
+    });
+
+    await expect(iterator.next()).rejects.toThrow("valid and ordered");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("retrieves and validates Binance spot quantity and notional rules", async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
       symbols: [{

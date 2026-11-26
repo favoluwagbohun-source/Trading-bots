@@ -5,6 +5,7 @@ coverage/
 .env.*
 data/telegram-state.json
 data/paper-trades.json
+research-data/
 *.log
 .DS_Store
 

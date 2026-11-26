@@ -57,3 +57,20 @@ groups held-out trades by a caller-supplied, timestamp-aware regime label.
 `compareResearchToPaper` compares supplied research PnL values with closed
 paper-trade PnL values only; open trades must not be included. These helpers
 require real historical inputs and do not imply performance.
+
+## Downloading Binance Spot history
+
+The worker exposes `npm run research:download --workspace apps/worker` to
+stream Binance public Spot klines for BTCUSDT and BTCUSDC at 1M, 1w, 1d, 4h,
+1h, and 5m. By default it requests the most recent ten calendar years; use
+`--start=YYYY-MM-DD --end=YYYY-MM-DD` for a fixed UTC date range or
+`--symbols=BTCUSDT,BTCUSDC` to choose markets. Each timeframe is written as
+JSON Lines with a manifest into ignored `research-data/`; pages are fetched
+sequentially and bounded in memory. Binance history begins at each market's
+listing, so requested dates earlier than that return no rows. The downloader
+does not fabricate missing candles or turn the dataset into evidence until a
+strategy-specific validation run is performed.
+
+As checked against Binance's public API on 2026-11-26, the earliest returned
+5-minute rows are August 2017 for BTCUSDT and December 2018 for BTCUSDC. Thus
+the requested ten-year window yields shorter, pair-specific histories.

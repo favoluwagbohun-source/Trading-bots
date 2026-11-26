@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc -b",
     "dev": "tsx watch src/main.ts",
+    "research:download": "npm run build --workspace @crypto-signal/market-data && tsx src/research/download-binance-history.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {
