@@ -235,7 +235,9 @@ function parseInstrumentRules(payload: unknown, symbol: string): ExchangeInstrum
     filter.filterType === "MIN_NOTIONAL" || filter.filterType === "NOTIONAL"
   );
   const steps = lotSizes.map((filter) => Number(filter.stepSize));
-  const quantityStep = steps.length ? Math.max(...steps) : NaN;
+  // Binance reports zero stepSize for an optional MARKET_LOT_SIZE filter.
+  const applicableSteps = steps.filter((step) => step !== 0);
+  const quantityStep = applicableSteps.length ? Math.max(...applicableSteps) : NaN;
   const minimumQuantity = lotSizes.length
     ? Math.max(...lotSizes.map((filter) => Number(filter.minQty)))
     : NaN;
@@ -255,7 +257,7 @@ function parseInstrumentRules(payload: unknown, symbol: string): ExchangeInstrum
   const maximumNotional = maximumNotionals.length
     ? Math.min(...maximumNotionals)
     : undefined;
-  const compatibleSteps = steps.every((step) => {
+  const compatibleSteps = applicableSteps.every((step) => {
     const ratio = quantityStep / step;
     return Number.isFinite(step) && step > 0 && Math.abs(ratio - Math.round(ratio)) < 1e-8;
   });

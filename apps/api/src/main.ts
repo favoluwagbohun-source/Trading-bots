@@ -9,3 +9,16 @@ if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 
 const app = await createApiServer();
 await app.listen({ port, host });
+
+process.once("SIGINT", () => {
+  void app.close().catch((error: unknown) => {
+    console.error("API shutdown failed:", error);
+    process.exitCode = 1;
+  });
+});
+process.once("SIGTERM", () => {
+  void app.close().catch((error: unknown) => {
+    console.error("API shutdown failed:", error);
+    process.exitCode = 1;
+  });
+});

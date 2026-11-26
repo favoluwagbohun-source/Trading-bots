@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: trading-bots
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: node apps/worker/dist/render-entrypoint.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: SERVE_WEB_ASSETS
+        value: "true"
+      - key: WATCHLIST_SYMBOLS
+        value: BTCUSDT,BTCUSDC
+      - key: SCAN_INTERVAL_MS
+        value: "60000"
+      - key: PAPER_TRADES_PATH
+        value: /app/data/paper-trades.json
+      - key: TELEGRAM_STATE_PATH
+        value: /app/data/telegram-state.json
+      - key: PAPER_FEE_RATE_PER_SIDE
+        value: "0.001"
+      - key: PAPER_SLIPPAGE_RATE_PER_SIDE
+        value: "0.0005"

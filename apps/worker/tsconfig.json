@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
+    { "path": "../../packages/backtesting" },
     { "path": "../../packages/indicators" },
     { "path": "../../packages/market-data" },
     { "path": "../../packages/risk-engine" },

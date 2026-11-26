@@ -1,4 +1,6 @@
+import { extname } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
+import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
   BinanceKlineStream,
@@ -35,6 +37,7 @@ interface ApiDependencies {
   readonly paperDashboard?: Omit<PaperDashboardOptions, "botToken"> & {
     readonly botToken?: string;
   };
+  readonly staticDirectory?: string;
   readonly logger?: boolean;
 }
 
@@ -144,8 +147,16 @@ export async function createApiServer(
       ...options,
       socketFactory: (url) => new NodeKlineSocket(url)
     }));
+  const staticDirectory = dependencies.staticDirectory ??
+    (process.env.SERVE_WEB_ASSETS === "true" ? "/app/apps/web/dist" : undefined);
 
   await app.register(websocket);
+  if (staticDirectory) {
+    await app.register(fastifyStatic, {
+      root: staticDirectory,
+      wildcard: false
+    });
+  }
 
   app.get("/health", async () => ({ status: "ok" }));
 
@@ -230,6 +241,21 @@ export async function createApiServer(
       stream.start();
     }
   );
+
+  if (staticDirectory) {
+    app.setNotFoundHandler((request, reply) => {
+      const pathname = new URL(request.url, "http://localhost").pathname;
+      if (
+        request.method !== "GET" ||
+        pathname === "/api" ||
+        pathname.startsWith("/api/")
+      ) {
+        return reply.code(404).send({ error: "Not Found" });
+      }
+      const asset = pathname.slice(1);
+      return reply.sendFile(asset && extname(asset) ? asset : "index.html");
+    });
+  }
 
   return app;
 }

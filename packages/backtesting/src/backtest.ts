@@ -602,7 +602,9 @@ export function runBacktest(request: RunBacktestRequest): BacktestResult {
     }
 
     if (!active && index >= signalStartIndex) {
-      const visibleCandles = candles.slice(0, index + 1);
+      const visibleCandles = request.evaluateSignal.historyMode === "indexed-full"
+        ? candles
+        : candles.slice(0, index + 1);
       const setup = request.evaluateSignal(visibleCandles, index);
       if (setup) {
         if (setup.strategy !== options.strategy) {

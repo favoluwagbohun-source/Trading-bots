@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Candle } from "@crypto-signal/shared";
 import { runBacktest } from "./backtest.js";
-import type { BacktestOptions } from "./types.js";
+import type { BacktestOptions, SignalEvaluator } from "./types.js";
 
 function candle(index: number, values: {
   open: number;
@@ -90,6 +90,29 @@ describe("event-driven backtester", () => {
       result.metrics.netProfit
     );
     expect(result.metrics.totalFees).toBe(0);
+  });
+
+  it("supports indexed evaluators without allocating a prefix for every candle", () => {
+    const candles = [
+      candle(0, { open: 100, high: 101, low: 99, close: 100 }),
+      candle(1, { open: 100, high: 102, low: 99, close: 101 }),
+      candle(2, { open: 100, high: 104, low: 99, close: 102 })
+    ];
+    const observed: number[] = [];
+    const evaluateSignal: SignalEvaluator = Object.assign(
+      (history: readonly Candle[], index: number) => {
+        expect(history).toHaveLength(candles.length);
+        expect(history[index]).toBe(candles[index]);
+        observed.push(index);
+        return index === 1 ? buySetup(history.slice(0, index + 1)) : undefined;
+      },
+      { historyMode: "indexed-full" as const }
+    );
+
+    const result = runBacktest({ candles, options, evaluateSignal });
+
+    expect(observed).toEqual([0, 1]);
+    expect(result.trades).toHaveLength(1);
   });
 
   it("tracks TP1, TP2, and the trailing runner as separate partial exits", () => {

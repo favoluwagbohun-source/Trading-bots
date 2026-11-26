@@ -4,8 +4,12 @@ Chronological, single-symbol event-driven backtester. One invocation accepts
 one strategy callback and returns that strategy's results only; do not combine
 strategy results into one performance figure.
 
-The callback receives a closed-candle prefix, never the full future dataset.
-Signals enter at the next available candle open. If a stop and target are both
+By default, the callback receives a closed-candle prefix, never the full
+future dataset. For large precomputed datasets, a callback may opt into
+`historyMode: "indexed-full"` to receive the complete closed-candle array and
+the current index without per-candle prefix allocations; such callbacks must
+strictly restrict all signal logic to candles at or before that index. Signals
+enter at the next available candle open. If a stop and target are both
 touched in one candle, the stop is processed first. Partial targets, fees,
 slippage, break-even management, confirmed-swing trailing stops, and
 end-of-data liquidation are modeled.
@@ -63,13 +67,27 @@ require real historical inputs and do not imply performance.
 The worker exposes `npm run research:download --workspace apps/worker` to
 stream Binance public Spot klines for BTCUSDT and BTCUSDC at 1M, 1w, 1d, 4h,
 1h, and 5m. By default it requests the most recent ten calendar years; use
-`--start=YYYY-MM-DD --end=YYYY-MM-DD` for a fixed UTC date range or
+`--years=1` for the one-year window or `--start=YYYY-MM-DD --end=YYYY-MM-DD` for
+a fixed UTC date range, or
 `--symbols=BTCUSDT,BTCUSDC` to choose markets. Each timeframe is written as
 JSON Lines with a manifest into ignored `research-data/`; pages are fetched
 sequentially and bounded in memory. Binance history begins at each market's
 listing, so requested dates earlier than that return no rows. The downloader
 does not fabricate missing candles or turn the dataset into evidence until a
 strategy-specific validation run is performed.
+
+Run validation from the repository root with
+`npm run research:validate --workspace apps/worker -- --dataset=research-data/<download-directory>`.
+The dataset path is relative to `apps/worker`. The command loads only closed
+candles, retrieves current Binance Spot instrument constraints, and writes a
+`validation-report-*.json` beside the source data. Defaults model 0.1% fee and
+0.05% slippage per side; override with `--fee-rate` and `--slippage-rate`.
+The six-month warm-up is excluded from trade evaluation, followed by
+non-overlapping 30-day test folds. Each strategy and top-down entry variation
+is evaluated independently with fixed assumptions; the run does not calibrate
+parameters or establish future profitability. The report also records the
+50-most-recent-swing-per-direction cap used to bound level generation and notes
+that current exchange filters are applied retrospectively.
 
 As checked against Binance's public API on 2026-11-26, the earliest returned
 5-minute rows are August 2017 for BTCUSDT and December 2018 for BTCUSDC. Thus

@@ -173,6 +173,28 @@ describe("Binance REST client", () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toContain("/api/v3/exchangeInfo?symbol=BTCUSDT");
   });
 
+  it("ignores Binance's zero market quantity step while retaining its maximum quantity", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
+      symbols: [{
+        symbol: "BTCUSDT",
+        filters: [
+          { filterType: "LOT_SIZE", minQty: "0.00001", maxQty: "9000", stepSize: "0.00001" },
+          { filterType: "MARKET_LOT_SIZE", minQty: "0", maxQty: "136.43606129", stepSize: "0" },
+          { filterType: "NOTIONAL", minNotional: "5", applyMaxToMarket: false }
+        ]
+      }]
+    }), { status: 200 }));
+    const client = new BinanceRestClient(["https://data-api.binance.vision"], fetchImpl);
+
+    await expect(client.getInstrumentRules("BTCUSDT")).resolves.toEqual({
+      quantityStep: 0.00001,
+      minimumQuantity: 0.00001,
+      maximumQuantity: 136.43606129,
+      minimumNotional: 5,
+      contractMultiplier: 1
+    });
+  });
+
   it("rejects incomplete exchange filters instead of guessing sizing rules", async () => {
     const client = new BinanceRestClient(["https://data-api.binance.vision"], async () =>
       new Response(JSON.stringify({

@@ -7,10 +7,12 @@
     "build": "tsc -b",
     "dev": "tsx watch src/main.ts",
     "research:download": "npm run build --workspace @crypto-signal/market-data && tsx src/research/download-binance-history.ts",
+    "research:validate": "npm run build --workspace @crypto-signal/backtesting && npm run build --workspace @crypto-signal/market-data && tsx src/research/validate-binance-history.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {
     "@crypto-signal/indicators": "0.1.0",
+    "@crypto-signal/backtesting": "0.1.0",
     "@crypto-signal/market-data": "0.1.0",
     "@crypto-signal/risk-engine": "0.1.0",
     "@crypto-signal/shared": "0.1.0",

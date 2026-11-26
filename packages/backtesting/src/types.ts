@@ -8,10 +8,13 @@ export interface BacktestSetup {
   readonly stopPrice: number;
 }
 
-export type SignalEvaluator = (
-  closedCandles: readonly Candle[],
-  index: number
-) => BacktestSetup | undefined;
+export interface SignalEvaluator {
+  (
+    closedCandles: readonly Candle[],
+    index: number
+  ): BacktestSetup | undefined;
+  readonly historyMode?: "visible-prefix" | "indexed-full";
+}
 
 export interface PartialExitOptions {
   readonly target1Allocation: number;

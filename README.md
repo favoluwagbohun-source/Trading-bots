@@ -9,7 +9,8 @@ out-of-sample validation harness; no strategy profitability has been
 established because no reviewable historical dataset has been supplied.
 Stage 15 adds a single-host Docker Compose deployment reference. It still
 requires the operator's HTTPS edge, secret management, and persistent backup
-service before public production use. See
+service before public production use. A limited Render Free Blueprint is also
+provided; it sleeps when idle and does not provide durable local state. See
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 - a TypeScript monorepo and documented architecture;

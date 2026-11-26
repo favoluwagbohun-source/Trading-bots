@@ -77,3 +77,25 @@ facility if the deployment platform provides one.
 
 The application only uses Binance public market data and simulated paper
 trades. It does not configure exchange credentials or submit real orders.
+
+## Render Free
+
+The root `render.yaml` provides a single free Docker web service. It runs the
+API, static frontend, and scanner/Telegram worker in one container; the API
+serves `/health`, the UI, and `/api/*` from the same origin. Connect the
+repository in Render using **New > Blueprint** and deploy the `render.yaml`
+configuration.
+
+Free web services sleep after a period without inbound requests and have an
+ephemeral filesystem. The scanner is therefore not guaranteed to run while
+the service sleeps, and JSON paper-trade/user state can be lost when Render
+restarts or redeploys the container. This configuration does not attempt to
+prevent sleep. For continuous scanning and durable paper-trade state, use an
+always-on worker and persistent storage on an appropriate paid plan.
+
+After the first deploy, set `TELEGRAM_BOT_TOKEN` and set
+`TELEGRAM_WEB_APP_URL` to the service's public HTTPS URL in Render's
+environment settings if Telegram features are wanted. Keep
+`STRATEGY_QUALITY_EVIDENCE` empty until evidence has been independently
+validated; paper entries remain quality-gated without supported evidence.
+Check the Render service logs and `/health` endpoint after each deploy.

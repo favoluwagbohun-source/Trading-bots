@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -19,9 +22,37 @@ const sampleCandle: Candle = {
 
 describe("market API", () => {
   const servers: FastifyInstance[] = [];
+  const staticDirectories: string[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
+    await Promise.all(staticDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true })
+    ));
+  });
+
+  it("serves the SPA and built assets without turning API 404s into HTML", async () => {
+    const staticDirectory = await mkdtemp(join(tmpdir(), "trading-bots-web-"));
+    staticDirectories.push(staticDirectory);
+    await writeFile(join(staticDirectory, "index.html"), "<main>Trading bots</main>");
+    await mkdir(join(staticDirectory, "assets"));
+    await writeFile(join(staticDirectory, "assets", "app.js"), "export {};");
+    const server = await createApiServer({ staticDirectory });
+    servers.push(server);
+
+    const home = await server.inject({ method: "GET", url: "/" });
+    const spaRoute = await server.inject({ method: "GET", url: "/dashboard" });
+    const asset = await server.inject({ method: "GET", url: "/assets/app.js" });
+    const apiNotFound = await server.inject({ method: "GET", url: "/api/not-found" });
+
+    expect(home.statusCode).toBe(200);
+    expect(home.body).toContain("Trading bots");
+    expect(spaRoute.statusCode).toBe(200);
+    expect(spaRoute.body).toContain("Trading bots");
+    expect(asset.statusCode).toBe(200);
+    expect(asset.body).toBe("export {};");
+    expect(apiNotFound.statusCode).toBe(404);
+    expect(apiNotFound.json()).toEqual({ error: "Not Found" });
   });
 
   it("serves historical candles through the market-data client", async () => {
