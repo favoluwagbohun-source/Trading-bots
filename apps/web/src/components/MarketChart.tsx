@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   CandlestickSeries,
   HistogramSeries,
@@ -49,6 +49,12 @@ interface Trendline {
 interface MarketChartProps {
   readonly candles: readonly Candle[];
   readonly marketKey: string;
+  readonly symbol?: string;
+  readonly timeframeLabel?: string;
+  readonly topDownBiasLabel?: string | null;
+  readonly breakoutNoticeLabel?: string | null;
+  readonly isFullscreen?: boolean;
+  readonly onToggleFullscreen?: () => void;
   readonly showTools?: boolean;
   readonly onCloseTools?: () => void;
   readonly dateControls?: ReactNode;
@@ -63,9 +69,12 @@ function price(value: string): number | undefined {
 }
 
 function displayPrice(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  const abs = Math.abs(value);
+  const decimals = abs >= 1000 ? 2 : abs >= 1 ? 4 : 6;
   return value.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 8
+    minimumFractionDigits: Math.min(2, decimals),
+    maximumFractionDigits: decimals
   });
 }
 
@@ -76,6 +85,12 @@ function candleTime(value: number): UTCTimestamp {
 export function MarketChart({
   candles,
   marketKey,
+  symbol,
+  timeframeLabel,
+  topDownBiasLabel,
+  breakoutNoticeLabel,
+  isFullscreen = false,
+  onToggleFullscreen,
   showTools = false,
   onCloseTools,
   dateControls,
@@ -94,6 +109,7 @@ export function MarketChart({
   const nextId = useRef(1);
   const fittedMarketKey = useRef("");
   const fittedLengthRef = useRef(0);
+  const unlockRafRef = useRef<number | null>(null);
   const drawingRef = useRef(false);
   const anchorRef = useRef<{ time: number; price: number } | null>(null);
   const [trendlines, setTrendlines] = useState<Trendline[]>([]);
@@ -109,6 +125,29 @@ export function MarketChart({
   const [tradePlan, setTradePlan] = useState<TradePlan | null>(null);
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [chartError, setChartError] = useState<string | null>(null);
+  const [freeScrollUnlocked, setFreeScrollUnlocked] = useState(false);
+
+  const unlockVerticalPanAfterFit = useCallback(() => {
+    if (unlockRafRef.current !== null) {
+      cancelAnimationFrame(unlockRafRef.current);
+    }
+    unlockRafRef.current = requestAnimationFrame(() => {
+      unlockRafRef.current = null;
+      const chart = chartRef.current;
+      if (!chart) return;
+      chart.priceScale("right").applyOptions({ autoScale: false });
+      setFreeScrollUnlocked(true);
+      setLayoutVersion((version) => version + 1);
+    });
+  }, []);
+
+  const handleAutoScaleReset = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.priceScale("right").applyOptions({ autoScale: true });
+    chart.timeScale().fitContent();
+    unlockVerticalPanAfterFit();
+  }, [unlockVerticalPanAfterFit]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -117,48 +156,71 @@ export function MarketChart({
       width: host.clientWidth,
       height: host.clientHeight,
       layout: {
-        background: { color: "#0b0e11" },
-        textColor: "#848e9c",
+        background: { color: "#0a0d12" },
+        textColor: "#94a3b8",
         fontFamily: "\"JetBrains Mono\", ui-monospace, monospace",
-        attributionLogo: true
+        attributionLogo: false
       },
       grid: {
-        vertLines: { color: "#151a21" },
-        horzLines: { color: "#151a21" }
+        vertLines: { color: "#151d28", style: LineStyle.Dotted },
+        horzLines: { color: "#151d28", style: LineStyle.Dotted }
       },
       crosshair: {
         mode: 0,
-        vertLine: { color: "#75808c", width: 1, style: LineStyle.Dashed },
-        horzLine: { color: "#75808c", width: 1, style: LineStyle.Dashed }
+        vertLine: { color: "#64748b", width: 1, style: LineStyle.Dashed },
+        horzLine: { color: "#64748b", width: 1, style: LineStyle.Dashed }
       },
       rightPriceScale: {
-        borderColor: "#232a35",
-        scaleMargins: { top: 0.08, bottom: 0.22 }
+        borderColor: "#253041",
+        scaleMargins: { top: 0.09, bottom: 0.16 },
+        minimumWidth: 78,
+        autoScale: true,
+        alignLabels: true
       },
       leftPriceScale: { visible: false },
       timeScale: {
-        borderColor: "#232a35",
+        borderColor: "#253041",
         timeVisible: true,
-        secondsVisible: false
+        secondsVisible: false,
+        rightOffset: 10,
+        barSpacing: 8,
+        minBarSpacing: 2
       },
       localization: {
         priceFormatter: displayPrice
       },
-      handleScroll: true,
-      handleScale: true
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: {
+          time: true,
+          price: true
+        },
+        axisDoubleClickReset: {
+          time: true,
+          price: true
+        }
+      }
     });
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#0ECB81",
-      downColor: "#F6465D",
-      borderUpColor: "#0ECB81",
-      borderDownColor: "#F6465D",
-      wickUpColor: "#0ECB81",
-      wickDownColor: "#F6465D",
-      priceLineVisible: false,
+      upColor: "#00c176",
+      downColor: "#f6465d",
+      borderUpColor: "#00c176",
+      borderDownColor: "#f6465d",
+      wickUpColor: "#00c176",
+      wickDownColor: "#f6465d",
+      priceLineVisible: true,
+      priceLineColor: "#384659",
       lastValueVisible: true
     });
     const volumePane = chart.addPane();
-    volumePane.setHeight(82);
+    volumePane.setHeight(62);
     const volumeSeries = volumePane.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       lastValueVisible: false,
@@ -177,6 +239,62 @@ export function MarketChart({
     const resizeObserver = new ResizeObserver(updateSize);
     resizeObserver.observe(host);
     chart.timeScale().subscribeVisibleLogicalRangeChange(updateSize);
+
+    // Smooth wheel zooming & vertical scrolling on the right price axis numbers (or Shift+Wheel / Alt+Wheel)
+    const onWheel = (event: WheelEvent) => {
+      const axisWidth = Math.max(72, chart.priceScale("right").width() || 78);
+      const rect = host.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const isOverRightAxis = pointerX >= host.clientWidth - axisWidth;
+
+      if (!isOverRightAxis && !event.shiftKey && !event.altKey) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const priceScale = chart.priceScale("right");
+      const visibleRange = priceScale.getVisibleRange();
+      if (!visibleRange || visibleRange.to <= visibleRange.from) return;
+
+      priceScale.applyOptions({ autoScale: false });
+      setFreeScrollUnlocked(true);
+
+      if (event.altKey && !isOverRightAxis) {
+        // Alt+Wheel pans vertically without zoom bias
+        const span = visibleRange.to - visibleRange.from;
+        const delta = Math.sign(event.deltaY) * span * 0.08;
+        const nextFrom = Math.max(Number.EPSILON, visibleRange.from + delta);
+        const nextTo = nextFrom + span;
+        priceScale.setVisibleRange({ from: nextFrom, to: nextTo });
+      } else {
+        // Wheel over the right price axis numbers scales vertically around center
+        const center = (visibleRange.from + visibleRange.to) / 2;
+        const halfSpan = (visibleRange.to - visibleRange.from) / 2;
+        const factor = 1 + Math.sign(event.deltaY) * 0.1;
+        const nextHalf = Math.max(center * 1e-6, halfSpan * factor);
+        priceScale.setVisibleRange({
+          from: Math.max(Number.EPSILON, center - nextHalf),
+          to: center + nextHalf
+        });
+      }
+      setLayoutVersion((version) => version + 1);
+    };
+    host.addEventListener("wheel", onWheel, { passive: false, capture: true });
+
+    const onPointerDownCapture = (event: PointerEvent) => {
+      // Ensure vertical drag on pane immediately unlocks free up/down panning if autoScale was active
+      const axisWidth = Math.max(72, chart.priceScale("right").width() || 78);
+      const rect = host.getBoundingClientRect();
+      if (event.clientX - rect.left < host.clientWidth - axisWidth) {
+        if (chart.priceScale("right").options().autoScale) {
+          chart.priceScale("right").applyOptions({ autoScale: false });
+          setFreeScrollUnlocked(true);
+        }
+      }
+    };
+    host.addEventListener("pointerdown", onPointerDownCapture, { capture: true });
 
     const onChartClick = (event: MouseEventParams) => {
       if (!drawingRef.current || event.point === undefined || typeof event.time !== "number") {
@@ -216,7 +334,10 @@ export function MarketChart({
     chart.subscribeClick(onChartClick);
 
     return () => {
+      if (unlockRafRef.current !== null) cancelAnimationFrame(unlockRafRef.current);
       resizeObserver.disconnect();
+      host.removeEventListener("wheel", onWheel, { capture: true });
+      host.removeEventListener("pointerdown", onPointerDownCapture, { capture: true });
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(updateSize);
       chart.unsubscribeClick(onChartClick);
       markersPlugin.detach();
@@ -246,22 +367,24 @@ export function MarketChart({
       time: candleTime(item.openTime),
       value: Number(item.volume),
       color: Number(item.close) >= Number(item.open)
-        ? "rgba(14, 203, 129, 0.34)"
+        ? "rgba(0, 193, 118, 0.34)"
         : "rgba(246, 70, 93, 0.34)"
     })));
     const previousLength = fittedLengthRef.current;
-    if (
+    const shouldFit =
       candles.length > 0 &&
       (fittedMarketKey.current !== marketKey ||
         (previousLength <= 5 && candles.length > 10) ||
-        !chartRef.current?.timeScale().getVisibleLogicalRange())
-    ) {
-      chartRef.current?.timeScale().fitContent();
+        !chartRef.current?.timeScale().getVisibleLogicalRange());
+    if (shouldFit && chartRef.current) {
+      chartRef.current.priceScale("right").applyOptions({ autoScale: true });
+      chartRef.current.timeScale().fitContent();
+      unlockVerticalPanAfterFit();
     }
     setLayoutVersion((version) => version + 1);
     fittedLengthRef.current = candles.length;
     if (candles.length > 0) fittedMarketKey.current = marketKey;
-  }, [candles, marketKey]);
+  }, [candles, marketKey, unlockVerticalPanAfterFit]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -269,25 +392,30 @@ export function MarketChart({
     if (!chart || !series) return;
     for (const line of manualLineRef.current) chart.removeSeries(line);
     manualLineRef.current = trendlines.map((trendline) => {
+      const ascending = trendline.endPrice >= trendline.startPrice;
       const line = chart.addSeries(LineSeries, {
-        color: "#cbd5e1",
+        color: ascending ? "#0ecb81" : "#f6465d",
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
         priceLineVisible: false,
         lastValueVisible: false,
-        crosshairMarkerVisible: false
+        crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null
       });
+      const stepSec = candles.length >= 2
+        ? Math.max(60, Math.floor((candles.at(-1)!.openTime - candles.at(-2)!.openTime) / 1000))
+        : 300;
       const latestTime = candles.at(-1)?.openTime;
       const rayEndTime = latestTime === undefined
-        ? trendline.endTime
-        : Math.max(trendline.endTime, Math.floor(latestTime / 1000));
+        ? trendline.endTime + stepSec * 8
+        : Math.max(trendline.endTime, Math.floor(latestTime / 1000)) + stepSec * 8;
       const projectedPrice = trendline.startPrice +
         (trendline.endPrice - trendline.startPrice) *
         ((rayEndTime - trendline.startTime) / (trendline.endTime - trendline.startTime));
       line.setData([
         { time: trendline.startTime as UTCTimestamp, value: trendline.startPrice },
         { time: trendline.endTime as UTCTimestamp, value: trendline.endPrice },
-        ...(rayEndTime > trendline.endTime
+        ...(rayEndTime > trendline.endTime && projectedPrice > 0
           ? [{ time: rayEndTime as UTCTimestamp, value: projectedPrice }]
           : [])
       ]);
@@ -308,6 +436,10 @@ export function MarketChart({
 
     const firstSec = Math.floor(candles[0]!.openTime / 1000);
     const lastSec = Math.floor(candles.at(-1)!.openTime / 1000);
+    const stepSec = candles.length >= 2
+      ? Math.max(60, Math.floor((candles.at(-1)!.openTime - candles.at(-2)!.openTime) / 1000))
+      : 300;
+    const rayFutureSec = lastSec + stepSec * 8;
     const created: Array<ISeriesApi<"Line">> = [];
 
     for (const item of overlayBundle.trendlines) {
@@ -315,20 +447,26 @@ export function MarketChart({
       const endSec = Math.floor(item.anchorB.openTime / 1000);
       if (endSec <= startSec) continue;
       const clippedStart = Math.max(startSec, firstSec);
-      const clippedEnd = Math.max(endSec, lastSec);
+      const clippedEnd = Math.max(endSec, rayFutureSec);
       if (clippedEnd <= clippedStart) continue;
 
       const interpolate = (tSec: number) =>
         item.anchorA.price +
         ((item.anchorB.price - item.anchorA.price) * (tSec - startSec)) / (endSec - startSec);
 
+      const startVal = interpolate(clippedStart);
+      const endVal = interpolate(clippedEnd);
+      if (!Number.isFinite(startVal) || startVal <= 0 || !Number.isFinite(endVal) || endVal <= 0) {
+        continue;
+      }
+
       const points: { time: UTCTimestamp; value: number }[] = [
-        { time: clippedStart as UTCTimestamp, value: interpolate(clippedStart) }
+        { time: clippedStart as UTCTimestamp, value: startVal }
       ];
       if (endSec > clippedStart && endSec < clippedEnd) {
         points.push({ time: endSec as UTCTimestamp, value: item.anchorB.price });
       }
-      points.push({ time: clippedEnd as UTCTimestamp, value: interpolate(clippedEnd) });
+      points.push({ time: clippedEnd as UTCTimestamp, value: endVal });
 
       const line = chart.addSeries(LineSeries, {
         color: item.color,
@@ -366,7 +504,7 @@ export function MarketChart({
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `Level ${displayPrice(level.price)}`
+        title: `S/R ${displayPrice(level.price)}`
       })
     );
 
@@ -408,11 +546,11 @@ export function MarketChart({
         }),
         series.createPriceLine({
           price: activePlan.stop,
-          color: "#F6465D",
+          color: "#f6465d",
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
-          title: `Stop ${displayPrice(activePlan.stop)}`
+          title: `SL ${displayPrice(activePlan.stop)}`
         }),
         series.createPriceLine({
           price: activePlan.target1,
@@ -435,6 +573,9 @@ export function MarketChart({
     priceLinesRef.current = lines;
   }, [activeTradeOverlay, levels, overlayBundle.levels, tradePlan]);
 
+  const priceScaleWidth = chartRef.current?.priceScale("right").width() || 78;
+  const plotRightEdge = Math.max(0, (hostRef.current?.clientWidth ?? 0) - priceScaleWidth);
+
   const zoneBoxes = zones.map((zone) => {
     const chart = chartRef.current;
     const series = candlesRef.current;
@@ -444,7 +585,7 @@ export function MarketChart({
     const startX = chart.timeScale().timeToCoordinate(candleTime(candles[0]!.openTime));
     if (top === null || bottom === null) return null;
     const left = Math.max(0, startX ?? 0);
-    const right = hostRef.current?.clientWidth ?? 0;
+    const right = Math.max(left, plotRightEdge);
     return (
       <div
         className={`chart-zone chart-zone-${zone.direction}`}
@@ -453,7 +594,7 @@ export function MarketChart({
           left,
           top: Math.min(top, bottom),
           width: Math.max(0, right - left),
-          height: Math.abs(bottom - top)
+          height: Math.max(4, Math.abs(bottom - top))
         }}
       />
     );
@@ -468,7 +609,7 @@ export function MarketChart({
     const startX = chart.timeScale().timeToCoordinate(candleTime(zone.startTime));
     if (top === null || bottom === null) return null;
     const left = Math.max(0, startX ?? 0);
-    const right = Math.max(left, (hostRef.current?.clientWidth ?? 0) - 92);
+    const right = Math.max(left, plotRightEdge);
     return (
       <div
         className={`chart-zone chart-zone-${zone.direction} chart-zone-auto`}
@@ -491,7 +632,7 @@ export function MarketChart({
     if (!chart || !series) return null;
     const x = chart.timeScale().timeToCoordinate(candleTime(dot.openTime));
     const y = series.priceToCoordinate(dot.price);
-    if (x === null || y === null) return null;
+    if (x === null || y === null || x > plotRightEdge) return null;
     return (
       <div
         className="chart-touch-dot"
@@ -574,6 +715,8 @@ export function MarketChart({
     setDrawingLine(next);
     setChartError(next ? "Tap two candles on the chart to draw a trendline ray." : null);
   }
+
+  const latest = candles.at(-1);
 
   const toolsPanel = (
     <div className="chart-tools-panel">
@@ -730,7 +873,8 @@ export function MarketChart({
         <div className="plotted-overlay-strip">
           <span>
             {activeTradeOverlay.label} · {activeTradeOverlay.side === "long" ? "Long" : "Short"} · Entry{" "}
-            {displayPrice(activeTradeOverlay.entryPrice)} · Stop {displayPrice(activeTradeOverlay.stopPrice)}
+            {displayPrice(activeTradeOverlay.entryPrice)} · SL {displayPrice(activeTradeOverlay.stopPrice)} · TP1{" "}
+            {displayPrice(activeTradeOverlay.target1)} · TP2 {displayPrice(activeTradeOverlay.target2)}
           </span>
           {onClearTradeOverlay && (
             <button type="button" className="quiet-button" onClick={onClearTradeOverlay}>
@@ -743,27 +887,64 @@ export function MarketChart({
       {chartError && <p className="chart-message" role="status">{chartError}</p>}
 
       <div className="chart-viewport">
-        {overlayBundle.legend && (
-          <div className="chart-ta-legend" aria-label="Technical analysis legend">
-            <span className="chart-ta-legend-title">{overlayBundle.legend}</span>
-            {overlayBundle.legendItems.length > 0 && (
-              <span className="chart-ta-legend-items">
-                {overlayBundle.legendItems.map((item) => (
-                  <span className="chart-ta-legend-chip" key={item.label}>
-                    <span className="chart-ta-swatch" style={{ background: item.color }} aria-hidden="true" />
-                    {item.label}
-                  </span>
-                ))}
+        <div className="chart-mt5-hud" aria-label="MT5 chart ticker and analysis overlay">
+          <div className="chart-mt5-hud-row">
+            <strong className="chart-mt5-symbol">
+              {symbol ?? "BTCUSDT"}, {timeframeLabel ?? "5m"}
+            </strong>
+            {latest && (
+              <span className="chart-mt5-ohlc">
+                O {displayPrice(Number(latest.open))} H {displayPrice(Number(latest.high))} L{" "}
+                {displayPrice(Number(latest.low))} C {displayPrice(Number(latest.close))}
               </span>
             )}
+            {topDownBiasLabel && (
+              <span className="chart-mt5-bias">{topDownBiasLabel}</span>
+            )}
           </div>
-        )}
-        <div ref={hostRef} className="chart-host" />
+          {breakoutNoticeLabel && (
+            <div className="chart-mt5-notice">{breakoutNoticeLabel}</div>
+          )}
+          {overlayBundle.legendItems.length > 0 && (
+            <div className="chart-ta-legend-items">
+              {overlayBundle.legendItems.map((item) => (
+                <span className="chart-ta-legend-chip" key={item.label}>
+                  <span className="chart-ta-swatch" style={{ background: item.color }} aria-hidden="true" />
+                  {item.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div ref={hostRef} className="chart-host" data-free-scroll={freeScrollUnlocked ? "true" : "false"} />
         <div className="chart-zone-layer" aria-hidden="true" key={layoutVersion}>
           {zoneBoxes}
           {autoZoneBoxes}
           {touchDotNodes}
         </div>
+
+        <div className="chart-floating-actions">
+          <button
+            type="button"
+            className="chart-float-btn"
+            onClick={handleAutoScaleReset}
+            title="Reset vertical & horizontal chart scale"
+          >
+            Auto Fit
+          </button>
+          {onToggleFullscreen && (
+            <button
+              type="button"
+              className="chart-float-btn"
+              onClick={onToggleFullscreen}
+              aria-pressed={isFullscreen}
+            >
+              {isFullscreen ? "Normal Screen" : "Full Screen"}
+            </button>
+          )}
+        </div>
+
         {candles.length === 0 && (
           <div className="chart-empty">
             <strong>Loading Binance candles</strong>

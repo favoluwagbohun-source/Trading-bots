@@ -17,7 +17,10 @@ import type { Candle, StrategyId } from "@crypto-signal/shared";
 import {
   activateSetupAtNextOpen
 } from "./additional-types.js";
-import { evaluateBreakAndRetestState } from "./break-and-retest.js";
+import {
+  evaluateBreakAndRetestState,
+  type BreakoutAnticipation
+} from "./break-and-retest.js";
 import { evaluateLiquiditySweep } from "./liquidity-sweep-reversal.js";
 import {
   evaluateOrderBlockRetest,
@@ -312,6 +315,7 @@ export interface TimeframeAnalysis {
 export interface MarketAnalysisSnapshot {
   readonly snapshotId: string;
   readonly symbol: string;
+  readonly executionTimeframe?: AnalysisMarketTimeframe;
   readonly analysisTime: number;
   readonly timeframes: Readonly<Record<AnalysisTimeframe, TimeframeAnalysis>>;
   readonly signalCandle: Candle;
@@ -347,6 +351,8 @@ export interface MarketAnalysisResult {
   readonly snapshot: MarketAnalysisSnapshot;
   readonly candidates: readonly SignalCandidate[];
   readonly evaluations: readonly StrategyEvaluation[];
+  readonly breakoutAnticipation?: BreakoutAnticipation;
+  readonly topDownBias?: string;
 }
 
 function assertCandle(
@@ -531,6 +537,57 @@ function createCandidate(
 interface CandidateEvaluation {
   readonly candidates: SignalCandidate[];
   readonly evaluations: StrategyEvaluation[];
+  readonly breakoutAnticipation?: BreakoutAnticipation;
+  readonly topDownBias?: string;
+}
+
+const DAILY_DOWN_SEQUENCE: readonly AnalysisTimeframe[] = ["1d", "4h", "1h", "5m"];
+
+function resolveDailyToExecutionBias(
+  timeframes: Readonly<Record<AnalysisTimeframe, TimeframeAnalysis>>,
+  executionTimeframe: AnalysisMarketTimeframe
+): {
+  readonly dominant: "bullish" | "bearish" | "neutral";
+  readonly summary: string;
+} {
+  const stopIndex = executionTimeframe === "1m"
+    ? DAILY_DOWN_SEQUENCE.length - 1
+    : DAILY_DOWN_SEQUENCE.indexOf(
+        executionTimeframe === "1M" || executionTimeframe === "1w" ? "1d" : executionTimeframe
+      );
+  const path = DAILY_DOWN_SEQUENCE.slice(0, stopIndex >= 0 ? stopIndex + 1 : DAILY_DOWN_SEQUENCE.length);
+  const available = path
+    .map((tf) => ({ tf, entry: timeframes[tf] }))
+    .filter(({ entry }) => entry.availableAt !== null && entry.candles.length >= 4);
+
+  if (available.length === 0) {
+    return { dominant: "neutral", summary: "not applicable" };
+  }
+
+  let score = 0;
+  const parts: string[] = [];
+  for (const { tf, entry } of available) {
+    const regime = entry.marketStructure.regime;
+    const weight = tf === "1d" ? 3 : tf === "4h" ? 2 : 1;
+    if (regime === "bullish") score += weight;
+    else if (regime === "bearish") score -= weight;
+    parts.push(`${tf.toUpperCase()}:${regime}`);
+  }
+
+  const dailyRegime = timeframes["1d"].availableAt !== null && timeframes["1d"].candles.length >= 4
+    ? timeframes["1d"].marketStructure.regime
+    : undefined;
+  const dominant: "bullish" | "bearish" | "neutral" =
+    score >= 2 || (dailyRegime === "bullish" && score > 0)
+      ? "bullish"
+      : score <= -2 || (dailyRegime === "bearish" && score < 0)
+        ? "bearish"
+        : "neutral";
+
+  return {
+    dominant,
+    summary: parts.join(", ")
+  };
 }
 
 function makeEvaluation(
@@ -562,12 +619,20 @@ function makeAnalysisLine(
   });
 }
 
-function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluation {
+function evaluateCandidates(
+  snapshot: MarketAnalysisSnapshot,
+  executionCandlesOverride?: readonly Candle[]
+): CandidateEvaluation {
   const timeframes = snapshot.timeframes;
-  const execution = timeframes["5m"].candles;
+  const executionTf = snapshot.executionTimeframe ?? "5m";
+  const execution = executionCandlesOverride ??
+    (executionTf !== "5m" && executionTf !== "1m"
+      ? timeframes[executionTf].candles
+      : timeframes["5m"].candles);
   const nextCandle = snapshot.nextExecutionCandle;
   const candidates: SignalCandidate[] = [];
   const evaluations: StrategyEvaluation[] = [];
+  const dailyToExecution = resolveDailyToExecutionBias(timeframes, executionTf);
   if (!nextCandle || execution.length < 3) {
     for (const mode of TOP_DOWN_MODES) {
       evaluations.push(makeEvaluation({
@@ -575,13 +640,13 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
         variation: mode,
         status: "rejected",
         direction: null,
-        relevantTimeframe: "5m",
+        relevantTimeframe: executionTf,
         evidence: [],
-        entryCondition: "Signal candle close followed by the immediate next 5-minute open.",
+        entryCondition: `Signal candle close followed by the immediate next ${executionTf} open.`,
         invalidationCondition: "No next execution candle or insufficient closed execution history.",
         stopMethodology: "Opposing 4-hour Safety Line; unavailable.",
         targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
-        reason: "A next execution candle and sufficient closed 5-minute history are required.",
+        reason: `A next execution candle and sufficient closed ${executionTf} history are required.`,
         signalId: null
       }));
     }
@@ -594,20 +659,24 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
         strategy,
         status: "rejected",
         direction: null,
-        relevantTimeframe: "5m",
+        relevantTimeframe: executionTf,
         evidence: [],
-        entryCondition: "Setup-specific closed-candle confirmation followed by next 5-minute open.",
+        entryCondition: `Setup-specific closed-candle confirmation followed by next ${executionTf} open.`,
         invalidationCondition: "No next execution candle or insufficient closed execution history.",
         stopMethodology: "Strategy-specific stop; not evaluated.",
         targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
-        reason: "A next execution candle and sufficient closed 5-minute history are required.",
+        reason: `A next execution candle and sufficient closed ${executionTf} history are required.`,
         signalId: null
       }));
     }
-    return { candidates, evaluations };
+    return {
+      candidates,
+      evaluations,
+      topDownBias: dailyToExecution.summary
+    };
   }
 
-  const levels = (["4h", "1h", "5m"] as const)
+  const levels = (["1d", "4h", "1h", "5m"] as const)
     .flatMap((timeframe) => timeframes[timeframe].swings
       .filter((swing) =>
         swing.confirmedAt <= snapshot.analysisTime &&
@@ -817,23 +886,27 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
   const breakAndRetest = evaluateBreakAndRetestState({
     symbol: snapshot.symbol,
     candles: execution,
-    levels
+    levels,
+    higherTimeframeBias: dailyToExecution.dominant,
+    executionTimeframe: executionTf
   });
   const setups = [
     {
       strategy: "break_and_retest" as const,
-      timeframe: "5m" as const,
+      timeframe: executionTf,
       setup: breakAndRetest.setup,
       state: breakAndRetest.state,
       rejectedReason: breakAndRetest.state === "awaiting_retest"
         ? "A confirmed breakout is awaiting a subsequent retest and directional rejection."
-        : breakAndRetest.state === "invalidated"
-          ? "The confirmed breakout level was invalidated before a valid retest entry."
-          : "No confirmed break, subsequent retest, and directional rejection were all present."
+        : breakAndRetest.anticipation?.kind === "approaching_breakout"
+          ? breakAndRetest.anticipation.note
+          : breakAndRetest.state === "invalidated"
+            ? "The confirmed breakout level was invalidated before a valid retest entry."
+            : "No confirmed break, subsequent retest, and directional rejection were all present."
     },
     {
       strategy: "liquidity_sweep_reversal" as const,
-      timeframe: "5m" as const,
+      timeframe: executionTf,
       setup: evaluateLiquiditySweep({
         symbol: snapshot.symbol,
         candles: execution,
@@ -844,7 +917,7 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
     },
     {
       strategy: "order_block_retest" as const,
-      timeframe: "5m" as const,
+      timeframe: executionTf,
       setup: evaluateOrderBlockRetest({
         symbol: snapshot.symbol,
         candles: execution,
@@ -864,13 +937,16 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
         evidence: [
           `Analysis timestamp: ${snapshot.analysisTime}.`,
           ...(item.strategy === "break_and_retest"
-            ? [`Break/retest state: ${item.state}.`]
+            ? [
+                `Break/retest state: ${item.state}.`,
+                `Top-down (${executionTf}): ${dailyToExecution.summary}.`
+              ]
             : []),
           ...(item.strategy === "liquidity_sweep_reversal"
             ? [`4h context: ${timeframes["4h"].marketStructure.regime}.`]
             : [])
         ],
-        entryCondition: "Setup-specific closed-candle confirmation followed by next 5-minute open.",
+        entryCondition: `Setup-specific closed-candle confirmation followed by next ${executionTf} open.`,
         invalidationCondition: "See strategy-specific level/zone invalidation rules.",
         stopMethodology: "Strategy-specific signal structure with configured buffer.",
         targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
@@ -889,7 +965,7 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
         direction: setup.side,
         relevantTimeframe: item.timeframe,
         evidence: [`Signal candle close: ${setup.signalCandle.close}.`],
-        entryCondition: "Entry at the immediate next 5-minute open.",
+        entryCondition: `Entry at the immediate next ${executionTf} open.`,
         invalidationCondition: "Setup reference is invalidated before entry.",
         stopMethodology: "Strategy-specific signal structure with configured buffer.",
         targetMethodology: "Risk-multiple targets, minimum 2R at TP2.",
@@ -926,7 +1002,9 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
       target2: plan.target2,
       target3: plan.target3,
       minimumRiskReward: plan.minimumRiskReward,
-      higherTimeframeBias: "not applicable",
+      higherTimeframeBias: item.strategy === "break_and_retest"
+        ? dailyToExecution.summary
+        : "not applicable",
       chartCandles: execution,
       chartAnnotations
     });
@@ -938,6 +1016,9 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
       relevantTimeframe: item.timeframe,
       evidence: [
         `Confirmed ${item.strategy} setup on ${item.timeframe}.`,
+        ...(item.strategy === "break_and_retest"
+          ? [`Top-down (${executionTf}): ${dailyToExecution.summary}.`]
+          : []),
         ...(item.strategy === "liquidity_sweep_reversal"
           ? [`4h context: ${timeframes["4h"].marketStructure.regime}.`]
           : []),
@@ -945,7 +1026,7 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
           ? `Reference level: ${setup.reference.price}.`
           : `Reference zone: ${setup.reference.low} - ${setup.reference.high}.`
       ],
-      entryCondition: `Enter at the immediate next 5-minute open (${plan.entryTime}).`,
+      entryCondition: `Enter at the immediate next ${executionTf} open (${plan.entryTime}).`,
       invalidationCondition: "Setup-specific level or zone invalidation before entry.",
       stopMethodology: "Strategy-specific signal-candle extreme with configured buffer (engineering assumption).",
       targetMethodology: `${plan.target1R}R partial and ${plan.target2R}R TP2; runner may trail.`,
@@ -953,18 +1034,25 @@ function evaluateCandidates(snapshot: MarketAnalysisSnapshot): CandidateEvaluati
       signalId: candidate.signalId
     }));
   }
-  return { candidates, evaluations };
+  return {
+    candidates,
+    evaluations,
+    ...(breakAndRetest.anticipation ? { breakoutAnticipation: breakAndRetest.anticipation } : {}),
+    topDownBias: dailyToExecution.summary
+  };
 }
 
 export class MarketAnalysisOrchestrator {
   analyze(
     symbolInput: string,
-    datasets: ReadonlyMap<AnalysisMarketTimeframe, readonly Candle[]>
+    datasets: ReadonlyMap<AnalysisMarketTimeframe, readonly Candle[]>,
+    options?: { readonly executionTimeframe?: AnalysisMarketTimeframe }
   ): MarketAnalysisResult | undefined {
     const symbol = normalizeAnalysisSymbol(symbolInput);
-    const inputExecution = datasets.get("5m") ?? [];
+    const executionTf: AnalysisMarketTimeframe = options?.executionTimeframe ?? "5m";
+    const inputExecution = datasets.get(executionTf) ?? datasets.get("5m") ?? [];
     for (let index = 0; index < inputExecution.length; index += 1) {
-      assertCandle(inputExecution[index]!, "5m", inputExecution[index - 1]);
+      assertCandle(inputExecution[index]!, executionTf, inputExecution[index - 1]);
     }
     const signalCandle = [...inputExecution]
       .reverse()
@@ -981,24 +1069,39 @@ export class MarketAnalysisOrchestrator {
       );
     }
     const immutableAnalyses = Object.freeze(analyses);
+    const closedCustomExecution = executionTf === "1m"
+      ? Object.freeze(
+          inputExecution
+            .filter((candle) => candle.closed && candle.closeTime <= analysisTime)
+            .map(immutableCandle)
+        )
+      : undefined;
     const nextExecutionCandle = inputExecution.find((candle) =>
       candle.openTime === signalCandle.closeTime + 1 && !candle.closed
     );
+    const snapshotSignalCandle = executionTf === "1m"
+      ? (closedCustomExecution?.at(-1) ?? immutableCandle(signalCandle))
+      : immutableAnalyses[executionTf].candles.at(-1)!;
     const snapshot: MarketAnalysisSnapshot = Object.freeze({
-      snapshotId: `${symbol}:5m:${signalCandle.openTime}`,
+      snapshotId: `${symbol}:${executionTf}:${signalCandle.openTime}`,
       symbol,
+      ...(executionTf === "5m" ? {} : { executionTimeframe: executionTf }),
       analysisTime,
       timeframes: immutableAnalyses,
-      signalCandle: immutableAnalyses["5m"].candles.at(-1)!,
+      signalCandle: snapshotSignalCandle,
       nextExecutionCandle: nextExecutionCandle
         ? immutableCandle(nextExecutionCandle)
         : null
     });
-    const evaluated = evaluateCandidates(snapshot);
+    const evaluated = evaluateCandidates(snapshot, closedCustomExecution);
     return Object.freeze({
       snapshot,
       candidates: Object.freeze(evaluated.candidates),
-      evaluations: Object.freeze(evaluated.evaluations)
+      evaluations: Object.freeze(evaluated.evaluations),
+      ...(evaluated.breakoutAnticipation
+        ? { breakoutAnticipation: evaluated.breakoutAnticipation }
+        : {}),
+      ...(evaluated.topDownBias ? { topDownBias: evaluated.topDownBias } : {})
     });
   }
 }

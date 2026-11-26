@@ -119,12 +119,25 @@ export interface SignalCandidateSummary {
   readonly chartAnnotations?: ChartAnnotationsView;
 }
 
+export interface BreakoutAnticipationSummary {
+  readonly kind: "awaiting_retest" | "approaching_breakout";
+  readonly side: "buy" | "sell";
+  readonly levelId: string;
+  readonly levelPrice: number;
+  readonly currentPrice: number;
+  readonly distancePercent: number;
+  readonly note: string;
+}
+
 export interface MarketAnalysisData {
   readonly symbol: string;
+  readonly executionTimeframe?: MarketTimeframe;
   readonly snapshotId: string;
   readonly analysisTime: number;
   readonly latestPrice: number;
   readonly signalCandle: Candle;
+  readonly topDownBias?: string;
+  readonly breakoutAnticipation?: BreakoutAnticipationSummary;
   readonly timeframes: readonly TimeframeSummary[];
   readonly fourHourTrendlines: readonly FourHourTrendline[];
   readonly trendlinesByTimeframe?: Readonly<Partial<Record<MarketTimeframe, readonly FourHourTrendline[]>>>;
@@ -237,11 +250,13 @@ export async function fetchHistoricalCandles(
 
 export async function fetchMarketAnalysis(
   symbol: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeframe?: MarketTimeframe
 ): Promise<MarketAnalysisData> {
   const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
   const init: RequestInit = signal === undefined ? {} : { signal };
   const params = new URLSearchParams({ symbol });
+  if (timeframe !== undefined) params.set("timeframe", timeframe);
   const response = await fetch(`${baseUrl}/api/market/analysis?${params.toString()}`, init);
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => undefined);

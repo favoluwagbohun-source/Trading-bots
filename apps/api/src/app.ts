@@ -273,21 +273,26 @@ export async function createApiServer(
     }
   );
 
-  app.get<{ Querystring: { readonly symbol?: string } }>(
+  app.get<{ Querystring: { readonly symbol?: string; readonly timeframe?: string } }>(
     "/api/market/analysis",
     async (request, reply) => {
       let symbol: string;
+      let timeframe: MarketTimeframe = "5m";
       try {
         if (!request.query.symbol) {
           throw new Error("symbol is required");
         }
         symbol = normalizeSymbol(request.query.symbol);
+        if (request.query.timeframe !== undefined) {
+          validateTimeframe(request.query.timeframe);
+          timeframe = request.query.timeframe;
+        }
       } catch (error) {
         return reply.code(400).send({ error: String(error) });
       }
 
       try {
-        return await analysisService.getAnalysis(symbol);
+        return await analysisService.getAnalysis(symbol, timeframe);
       } catch (error) {
         request.log.error({ err: error }, "Failed to compute live market analysis");
         return reply.code(502).send({ error: "Market analysis is temporarily unavailable" });

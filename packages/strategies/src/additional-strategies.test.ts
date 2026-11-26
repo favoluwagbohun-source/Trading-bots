@@ -109,9 +109,53 @@ describe("independent additional strategy prototypes", () => {
 
     expect(evaluation).toMatchObject({
       state: "awaiting_retest",
-      levelId: level.id
+      levelId: level.id,
+      anticipation: {
+        kind: "awaiting_retest",
+        side: "buy",
+        levelId: level.id
+      }
     });
     expect(evaluation.setup).toBeUndefined();
+  });
+
+  it("respects higher-timeframe bias and reports approaching breakout anticipation notices", () => {
+    const resistance: PriceLevel = {
+      id: "1d-swing-high",
+      kind: "swing_high",
+      price: 100,
+      confirmedAt: 0
+    };
+    const approachingCandles = [
+      candle(0, { open: 98, high: 99, low: 97.5, close: 98.8 }),
+      candle(1, { open: 98.8, high: 99.6, low: 98.5, close: 99.3 }),
+      candle(2, { open: 99.3, high: 99.9, low: 99.1, close: 99.75 })
+    ];
+
+    const bullishWatch = evaluateBreakAndRetestState({
+      symbol: "BTCUSDT",
+      candles: approachingCandles,
+      levels: [resistance],
+      higherTimeframeBias: "bullish",
+      executionTimeframe: "5m"
+    });
+    expect(bullishWatch.state).toBe("no_break");
+    expect(bullishWatch.anticipation).toMatchObject({
+      kind: "approaching_breakout",
+      side: "buy",
+      levelId: "1d-swing-high"
+    });
+    expect(bullishWatch.anticipation?.note).toContain("possible BUY breakout");
+
+    const blockedByBearishHtf = evaluateBreakAndRetestState({
+      symbol: "BTCUSDT",
+      candles: approachingCandles,
+      levels: [resistance],
+      higherTimeframeBias: "bearish",
+      executionTimeframe: "5m"
+    });
+    expect(blockedByBearishHtf.anticipation).toBeUndefined();
+    expect(blockedByBearishHtf.state).toBe("no_break");
   });
 
   it("requires a closed sweep candle and a previously confirmed swing level", () => {

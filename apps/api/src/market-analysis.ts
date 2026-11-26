@@ -7,6 +7,7 @@ import {
   detectChartTrendlines,
   type ActiveOrderBlockZone,
   type AnalysisMarketTimeframe,
+  type BreakoutAnticipation,
   type ChartAnnotations,
   type StrategyEvaluation,
   type TimeframeAnalysis
@@ -70,10 +71,13 @@ export interface SignalCandidateView {
 
 export interface MarketAnalysisView {
   readonly symbol: string;
+  readonly executionTimeframe: MarketTimeframe;
   readonly snapshotId: string;
   readonly analysisTime: number;
   readonly latestPrice: number;
   readonly signalCandle: Candle;
+  readonly topDownBias?: string;
+  readonly breakoutAnticipation?: BreakoutAnticipation;
   readonly timeframes: readonly TimeframeSummaryView[];
   readonly fourHourTrendlines: readonly FourHourTrendlineView[];
   readonly trendlinesByTimeframe: Readonly<Partial<Record<MarketTimeframe, readonly FourHourTrendlineView[]>>>;
@@ -173,15 +177,24 @@ export class LiveMarketAnalysisService {
     private readonly cacheTtlMs = 20_000
   ) {}
 
-  async getAnalysis(symbol: string): Promise<MarketAnalysisView> {
+  async getAnalysis(
+    symbol: string,
+    executionTimeframe: MarketTimeframe = "5m"
+  ): Promise<MarketAnalysisView> {
+    const cacheKey = `${symbol}:${executionTimeframe}`;
     const now = Date.now();
-    const cached = this.cache.get(symbol);
+    const cached = this.cache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
       return cached.value;
     }
 
+    const fetchTimeframes: readonly AnalysisMarketTimeframe[] =
+      executionTimeframe === "1m"
+        ? [...ANALYSIS_TIMEFRAMES, "1m"]
+        : ANALYSIS_TIMEFRAMES;
+
     const results = await Promise.allSettled(
-      ANALYSIS_TIMEFRAMES.map((timeframe) =>
+      fetchTimeframes.map((timeframe) =>
         this.restClient.getHistoricalKlines({
           symbol,
           timeframe,
@@ -193,23 +206,25 @@ export class LiveMarketAnalysisService {
     const datasets = new Map<AnalysisMarketTimeframe, readonly Candle[]>();
     const warnings: string[] = [];
     for (const [index, result] of results.entries()) {
-      const timeframe = ANALYSIS_TIMEFRAMES[index]!;
+      const timeframe = fetchTimeframes[index]!;
       if (result.status === "fulfilled") {
         datasets.set(timeframe, result.value);
       } else {
         warnings.push(`Unable to load ${timeframe} candles`);
-        if (timeframe === "5m") {
-          throw new Error(`Unable to load 5m execution candles: ${String(result.reason)}`);
+        if (timeframe === "5m" || timeframe === executionTimeframe) {
+          throw new Error(`Unable to load ${timeframe} execution candles: ${String(result.reason)}`);
         }
       }
     }
 
-    const analyzed = this.orchestrator.analyze(symbol, datasets);
+    const analyzed = this.orchestrator.analyze(symbol, datasets, {
+      executionTimeframe: executionTimeframe as AnalysisMarketTimeframe
+    });
     if (!analyzed) {
-      throw new Error(`No closed 5m candles available for ${symbol}`);
+      throw new Error(`No closed ${executionTimeframe} candles available for ${symbol}`);
     }
 
-    const { snapshot, evaluations, candidates } = analyzed;
+    const { snapshot, evaluations, candidates, breakoutAnticipation, topDownBias } = analyzed;
     const timeframes: TimeframeSummaryView[] = ANALYSIS_TIMEFRAMES.map((timeframe) => {
       const entry = snapshot.timeframes[timeframe];
       const volatilityRegime: TimeframeSummaryView["volatilityRegime"] =
@@ -242,6 +257,7 @@ export class LiveMarketAnalysisService {
 
     const fourHourTrendlines = trendlinesByTimeframe["4h"] ?? [];
     const swingLevels: SwingLevelView[] = [
+      ...(swingsByTimeframe["1d"] ?? []).slice(-2),
       ...(swingsByTimeframe["4h"] ?? []).slice(-3),
       ...(swingsByTimeframe["1h"] ?? []).slice(-3)
     ].slice(-6);
@@ -254,15 +270,21 @@ export class LiveMarketAnalysisService {
       }).map((zone) => ({ ...zone, timeframe: "1h" as const })),
       ...detectActiveOrderBlocks(snapshot.timeframes["4h"].candles, {
         maximumZoneAgeCandles: Math.min(80, Math.max(10, snapshot.timeframes["4h"].candles.length - 2))
-      }).map((zone) => ({ ...zone, timeframe: "4h" as const }))
+      }).map((zone) => ({ ...zone, timeframe: "4h" as const })),
+      ...detectActiveOrderBlocks(snapshot.timeframes["1d"].candles, {
+        maximumZoneAgeCandles: Math.min(60, Math.max(8, snapshot.timeframes["1d"].candles.length - 2))
+      }).map((zone) => ({ ...zone, timeframe: "1d" as const }))
     ];
 
     const view: MarketAnalysisView = {
       symbol: snapshot.symbol,
+      executionTimeframe,
       snapshotId: snapshot.snapshotId,
       analysisTime: snapshot.analysisTime,
       latestPrice: Number(snapshot.signalCandle.close),
       signalCandle: snapshot.signalCandle,
+      ...(topDownBias ? { topDownBias } : {}),
+      ...(breakoutAnticipation ? { breakoutAnticipation } : {}),
       timeframes,
       fourHourTrendlines,
       trendlinesByTimeframe,
@@ -290,7 +312,7 @@ export class LiveMarketAnalysisService {
 
     if (this.cacheTtlMs > 0) {
       if (this.cache.size > 50) this.cache.clear();
-      this.cache.set(symbol, {
+      this.cache.set(cacheKey, {
         expiresAt: now + this.cacheTtlMs,
         value: view
       });

@@ -5,12 +5,25 @@ export interface BreakAndRetestOptions {
   readonly lookbackCandles: number;
   readonly retestTolerancePercent: number;
   readonly stopBufferPercent: number;
+  readonly anticipationThresholdPercent: number;
+}
+
+export interface BreakoutAnticipation {
+  readonly kind: "awaiting_retest" | "approaching_breakout";
+  readonly side: "buy" | "sell";
+  readonly levelId: string;
+  readonly levelPrice: number;
+  readonly currentPrice: number;
+  readonly distancePercent: number;
+  readonly note: string;
 }
 
 export interface BreakAndRetestInput {
   readonly symbol: string;
   readonly candles: readonly Candle[];
   readonly levels: readonly PriceLevel[];
+  readonly higherTimeframeBias?: "bullish" | "bearish" | "neutral";
+  readonly executionTimeframe?: string;
   readonly options?: Partial<BreakAndRetestOptions>;
 }
 
@@ -18,13 +31,23 @@ export interface BreakAndRetestEvaluation {
   readonly state: "no_break" | "awaiting_retest" | "invalidated" | "retest_confirmed";
   readonly levelId?: string;
   readonly setup?: StrategySetup;
+  readonly anticipation?: BreakoutAnticipation;
 }
 
 const DEFAULT_OPTIONS: BreakAndRetestOptions = {
   lookbackCandles: 12,
   retestTolerancePercent: 0.25,
-  stopBufferPercent: 0.1
+  stopBufferPercent: 0.1,
+  anticipationThresholdPercent: 0.45
 };
+
+function allowsSide(
+  bias: "bullish" | "bearish" | "neutral" | undefined,
+  side: "buy" | "sell"
+): boolean {
+  if (!bias || bias === "neutral") return true;
+  return (bias === "bullish" && side === "buy") || (bias === "bearish" && side === "sell");
+}
 
 export function evaluateBreakAndRetestState(
   input: BreakAndRetestInput
@@ -35,18 +58,37 @@ export function evaluateBreakAndRetestState(
   }
   validateTolerance(options.retestTolerancePercent, "retestTolerancePercent");
   validateTolerance(options.stopBufferPercent, "stopBufferPercent");
+  validateTolerance(options.anticipationThresholdPercent, "anticipationThresholdPercent");
 
   const candles = input.candles;
   const currentIndex = candles.length - 1;
   const current = candles[currentIndex];
   if (!current?.closed || currentIndex < 2) return { state: "no_break" };
+  const currentClose = Number(current.close);
   const firstBreakIndex = Math.max(1, currentIndex - options.lookbackCandles);
   let invalidatedLevel: string | undefined;
-  let awaitingLevel: string | undefined;
+  let awaitingMatch:
+    | {
+        levelId: string;
+        side: "buy" | "sell";
+        levelPrice: number;
+        distancePercent: number;
+      }
+    | undefined;
+  let approachingMatch:
+    | {
+        levelId: string;
+        side: "buy" | "sell";
+        levelPrice: number;
+        distancePercent: number;
+      }
+    | undefined;
 
   for (const level of input.levels) {
     if (!Number.isFinite(level.price) || level.price <= 0) continue;
     const side = level.kind === "swing_high" ? "buy" : "sell";
+    if (!allowsSide(input.higherTimeframeBias, side)) continue;
+
     let breakIndex = -1;
     for (let index = firstBreakIndex; index < currentIndex; index += 1) {
       const before = candles[index - 1];
@@ -57,7 +99,28 @@ export function evaluateBreakAndRetestState(
         : Number(before.close) >= level.price && Number(breakout.close) < level.price;
       if (crossed) breakIndex = index;
     }
-    if (breakIndex < 0) continue;
+
+    if (breakIndex < 0) {
+      if (level.confirmedAt <= current.closeTime) {
+        const distancePercent = Math.abs(currentClose - level.price) / level.price * 100;
+        const approachingSide =
+          side === "buy"
+            ? currentClose <= level.price && distancePercent <= options.anticipationThresholdPercent
+            : currentClose >= level.price && distancePercent <= options.anticipationThresholdPercent;
+        if (
+          approachingSide &&
+          (!approachingMatch || distancePercent < approachingMatch.distancePercent)
+        ) {
+          approachingMatch = {
+            levelId: level.id,
+            side,
+            levelPrice: level.price,
+            distancePercent
+          };
+        }
+      }
+      continue;
+    }
 
     let invalidated = false;
     for (let index = breakIndex + 1; index < currentIndex; index += 1) {
@@ -90,7 +153,13 @@ export function evaluateBreakAndRetestState(
         Number(current.close) < level.price &&
         Number(current.close) < Number(current.open);
     if (!touched) {
-      awaitingLevel = level.id;
+      const distancePercent = Math.abs(currentClose - level.price) / level.price * 100;
+      awaitingMatch ??= {
+        levelId: level.id,
+        side,
+        levelPrice: level.price,
+        distancePercent
+      };
       continue;
     }
 
@@ -111,8 +180,38 @@ export function evaluateBreakAndRetestState(
       })
     };
   }
-  if (awaitingLevel) return { state: "awaiting_retest", levelId: awaitingLevel };
+
+  if (awaitingMatch) {
+    return {
+      state: "awaiting_retest",
+      levelId: awaitingMatch.levelId,
+      anticipation: {
+        kind: "awaiting_retest",
+        side: awaitingMatch.side,
+        levelId: awaitingMatch.levelId,
+        levelPrice: awaitingMatch.levelPrice,
+        currentPrice: currentClose,
+        distancePercent: awaitingMatch.distancePercent,
+        note: `Breakout confirmed above/through key level; waiting for clean retest rejection before ${awaitingMatch.side.toUpperCase()} entry.`
+      }
+    };
+  }
   if (invalidatedLevel) return { state: "invalidated", levelId: invalidatedLevel };
+  if (approachingMatch) {
+    return {
+      state: "no_break",
+      levelId: approachingMatch.levelId,
+      anticipation: {
+        kind: "approaching_breakout",
+        side: approachingMatch.side,
+        levelId: approachingMatch.levelId,
+        levelPrice: approachingMatch.levelPrice,
+        currentPrice: currentClose,
+        distancePercent: approachingMatch.distancePercent,
+        note: `Price is testing within ${approachingMatch.distancePercent.toFixed(2)}% of a key ${approachingMatch.side === "buy" ? "supply/resistance" : "demand/support"} zone; expecting possible ${approachingMatch.side.toUpperCase()} breakout.`
+      }
+    };
+  }
   return { state: "no_break" };
 }
 

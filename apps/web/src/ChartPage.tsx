@@ -12,7 +12,6 @@ import { MarketChart } from "./components/MarketChart.js";
 import { PairPickerModal } from "./components/PairPickerModal.js";
 import { QuantSignalsView } from "./components/QuantSignalsView.js";
 import { SignalFeedView } from "./components/SignalFeedView.js";
-import { StrategyOverlayToggles } from "./components/StrategyOverlayToggles.js";
 import { PaperDashboard } from "./PaperDashboard.js";
 import {
   ORDERED_TIMEFRAMES,
@@ -67,9 +66,10 @@ export function ChartPage() {
   const [error, setError] = useState<string | null>(null);
   const [showTools, setShowTools] = useState(false);
   const [showSideRail, setShowSideRail] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [overlayLens, setOverlayLens] = useState<OverlayLens>("auto");
   const [enabledStrategies, setEnabledStrategies] = useState<Set<OverlayLens | "swings">>(
-    () => new Set(["top_down_trendline", "break_and_retest", "liquidity_sweep_reversal", "order_block_retest", "swings"])
+    () => new Set(["top_down_trendline", "break_and_retest", "order_block_retest"])
   );
   const [pairPickerOpen, setPairPickerOpen] = useState(false);
   const [activeTradeOverlay, setActiveTradeOverlay] = useState<ChartTradeOverlay | null>(null);
@@ -108,6 +108,24 @@ export function ChartPage() {
     () => (analysis ? summarizeTopDownAlignment(analysis.timeframes) : null),
     [analysis]
   );
+
+  const topDownBiasLabel = useMemo(() => {
+    if (!analysis) return null;
+    const bias = analysis.topDownBias?.trim();
+    if (bias && bias !== "neutral") {
+      return `1D → ${formatTimeframeLabel(timeframe)}: ${bias}`;
+    }
+    if (topDownSummary) {
+      return `1D → ${formatTimeframeLabel(timeframe)}: ${topDownSummary.dominantRegime}`;
+    }
+    return null;
+  }, [analysis, timeframe, topDownSummary]);
+
+  const breakoutNoticeLabel = useMemo(() => {
+    const notice = analysis?.breakoutAnticipation;
+    if (!notice) return null;
+    return `${notice.side === "buy" ? "Bullish" : "Bearish"} Breakout Watch · ${notice.note}`;
+  }, [analysis]);
 
   const overlayBundle = useMemo(
     () =>
@@ -255,7 +273,7 @@ export function ChartPage() {
     const controller = new AbortController();
     setAnalysisLoading(true);
     setAnalysisError(null);
-    fetchMarketAnalysis(symbol, controller.signal)
+    fetchMarketAnalysis(symbol, controller.signal, timeframe)
       .then((result) => {
         setAnalysis(result);
         setAnalysisLoading(false);
@@ -266,7 +284,7 @@ export function ChartPage() {
         setAnalysisLoading(false);
       });
     return () => controller.abort();
-  }, [symbol, analysisTick]);
+  }, [symbol, timeframe, analysisTick]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -300,44 +318,67 @@ export function ChartPage() {
     setActiveTab("chart");
   }, []);
 
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && isFullscreen && !document.fullscreenElement) {
+        setIsFullscreen(false);
+      }
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isFullscreen]);
+
+  const handleToggleFullscreen = useCallback(async () => {
+    if (isFullscreen) {
+      if (document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+        } catch {
+          // Fallback to viewport CSS fullscreen exit
+        }
+      }
+      setIsFullscreen(false);
+      return;
+    }
+    setIsFullscreen(true);
+    try {
+      await document.documentElement.requestFullscreen?.();
+    } catch {
+      // Fallback to viewport CSS fullscreen mode in embedded contexts
+    }
+  }, [isFullscreen]);
+
   const handlePreviewStrategy = useCallback((strategy: StrategyId) => {
     setOverlayLens(strategy);
     if (strategy === "top_down_trendline") {
-      setTimeframe("4h");
+      setEnabledStrategies(new Set(["top_down_trendline"]));
+    } else if (strategy === "break_and_retest") {
+      setEnabledStrategies(new Set(["break_and_retest", "order_block_retest"]));
+    } else if (strategy === "order_block_retest") {
+      setEnabledStrategies(new Set(["order_block_retest"]));
     } else {
-      setTimeframe("5m");
+      setEnabledStrategies(new Set(["top_down_trendline", "break_and_retest", "order_block_retest"]));
     }
     setActiveTab("chart");
   }, []);
 
   const handleSelectOverlayLens = useCallback((nextLens: OverlayLens) => {
     setOverlayLens(nextLens);
-    if (nextLens === "top_down_trendline") {
-      setTimeframe("4h");
-    } else if (nextLens === "order_block_retest") {
-      setTimeframe("5m");
-    }
-  }, []);
-
-  const handleToggleStrategyOverlay = useCallback((strategy: OverlayLens | "swings") => {
-    setEnabledStrategies((current) => {
-      const next = new Set(current);
-      if (next.has(strategy)) {
-        next.delete(strategy);
-      } else {
-        next.add(strategy);
-      }
-      return next;
-    });
-  }, []);
-
-  const handleSelectAllStrategies = useCallback((enable: boolean) => {
-    if (enable) {
-      setEnabledStrategies(
-        new Set(["top_down_trendline", "break_and_retest", "liquidity_sweep_reversal", "order_block_retest", "swings"])
-      );
-    } else {
+    if (nextLens === "off") {
       setEnabledStrategies(new Set());
+    } else if (nextLens === "top_down_trendline") {
+      setEnabledStrategies(new Set(["top_down_trendline"]));
+    } else if (nextLens === "break_and_retest") {
+      setEnabledStrategies(new Set(["break_and_retest", "order_block_retest"]));
+    } else {
+      setEnabledStrategies(new Set(["top_down_trendline", "break_and_retest", "order_block_retest"]));
     }
   }, []);
 
@@ -386,7 +427,7 @@ export function ChartPage() {
   );
 
   return (
-    <main className="app-shell">
+    <main className={isFullscreen && activeTab === "chart" ? "app-shell chart-fullscreen" : "app-shell"}>
       <header className="app-topbar">
         <div className="topbar-zone-brand">
           <a
@@ -529,6 +570,14 @@ export function ChartPage() {
               </button>
               <button
                 type="button"
+                className={isFullscreen ? "bar-button active" : "bar-button"}
+                onClick={handleToggleFullscreen}
+                aria-pressed={isFullscreen}
+              >
+                {isFullscreen ? "Normal Screen" : "Full Screen"}
+              </button>
+              <button
+                type="button"
                 className={showSideRail ? "bar-button desktop-only-btn active" : "bar-button desktop-only-btn"}
                 onClick={() => setShowSideRail((open) => !open)}
                 aria-pressed={showSideRail}
@@ -543,6 +592,12 @@ export function ChartPage() {
               <MarketChart
                 candles={candles}
                 marketKey={`${symbol}:${timeframe}:${startDate}:${endDate}`}
+                symbol={symbol}
+                timeframeLabel={formatTimeframeLabel(timeframe)}
+                topDownBiasLabel={topDownBiasLabel}
+                breakoutNoticeLabel={breakoutNoticeLabel}
+                isFullscreen={isFullscreen}
+                onToggleFullscreen={handleToggleFullscreen}
                 showTools={showTools}
                 onCloseTools={() => setShowTools(false)}
                 dateControls={dateControls}
@@ -552,7 +607,7 @@ export function ChartPage() {
               />
             </div>
 
-            {showSideRail && (
+            {showSideRail && !isFullscreen && (
               <aside className="intel-side-rail" aria-label="Live market intelligence">
                 <div className="rail-watchlist">
                   <div className="subblock-header">
@@ -575,7 +630,7 @@ export function ChartPage() {
 
                 {topDownSummary && (
                   <div className="rail-bias-strip">
-                    <span className="muted-meta">Top-Down Consensus</span>
+                    <span className="muted-meta">Top-Down (1D → {formatTimeframeLabel(timeframe)})</span>
                     <strong
                       className={
                         topDownSummary.dominantRegime === "bullish"
@@ -587,18 +642,30 @@ export function ChartPage() {
                               : "tone-neutral"
                       }
                     >
-                      {topDownSummary.dominantRegime === "mixed"
-                        ? `${topDownSummary.bullishCount} Bullish · ${topDownSummary.bearishCount} Bearish`
-                        : `${topDownSummary.alignedCount}/${topDownSummary.totalAvailable} ${topDownSummary.dominantRegime}`}
+                      {analysis?.topDownBias && analysis.topDownBias !== "neutral"
+                        ? analysis.topDownBias
+                        : topDownSummary.dominantRegime === "mixed"
+                          ? `${topDownSummary.bullishCount} Bullish · ${topDownSummary.bearishCount} Bearish`
+                          : `${topDownSummary.alignedCount}/${topDownSummary.totalAvailable} ${topDownSummary.dominantRegime}`}
                     </strong>
                   </div>
                 )}
 
-                <StrategyOverlayToggles
-                  enabledStrategies={enabledStrategies}
-                  onToggle={handleToggleStrategyOverlay}
-                  onSelectAll={handleSelectAllStrategies}
-                />
+                {analysis?.breakoutAnticipation && (
+                  <div className="surface-card" role="status">
+                    <div className="card-top-line">
+                      <strong className="card-title">Breakout Expectation Notice</strong>
+                      <span className={analysis.breakoutAnticipation.side === "buy" ? "tone-bullish" : "tone-bearish"}>
+                        {analysis.breakoutAnticipation.side === "buy" ? "Bullish Watch" : "Bearish Watch"}
+                      </span>
+                    </div>
+                    <p className="evaluation-reason">{analysis.breakoutAnticipation.note}</p>
+                    <span className="mono-meta">
+                      Key Level {formatPrice(analysis.breakoutAnticipation.levelPrice)} · Dist{" "}
+                      {analysis.breakoutAnticipation.distancePercent.toFixed(2)}%
+                    </span>
+                  </div>
+                )}
 
                 <AnalysisView
                   symbol={symbol}

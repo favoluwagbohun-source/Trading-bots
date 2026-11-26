@@ -186,12 +186,14 @@ describe("market API", () => {
 
     const response = await server.inject({
       method: "GET",
-      url: "/api/market/analysis?symbol=btcusdt"
+      url: "/api/market/analysis?symbol=btcusdt&timeframe=1h"
     });
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.symbol).toBe("BTCUSDT");
+    expect(body.executionTimeframe).toBe("1h");
+    expect(typeof body.topDownBias).toBe("string");
     expect(body.timeframes).toHaveLength(6);
     expect(body.evaluations).toHaveLength(6);
     expect(body.warnings).toEqual([]);
@@ -201,5 +203,11 @@ describe("market API", () => {
       url: "/api/market/analysis?symbol=bad"
     });
     expect(bad.statusCode).toBe(400);
+
+    const badTf = await server.inject({
+      method: "GET",
+      url: "/api/market/analysis?symbol=BTCUSDT&timeframe=invalid"
+    });
+    expect(badTf.statusCode).toBe(400);
   });
 });

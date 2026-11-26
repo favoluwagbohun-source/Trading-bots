@@ -173,6 +173,8 @@ describe("chart-overlays", () => {
 
     expect(overlay.trendlines).toHaveLength(2);
     expect(overlay.trendlines.map((line) => line.role)).toEqual(["support", "resistance"]);
+    expect(overlay.trendlines.find((line) => line.direction === "ascending")?.color).toBe("#0ecb81");
+    expect(overlay.trendlines.find((line) => line.direction === "descending")?.color).toBe("#f6465d");
     expect(overlay.touchDots).toHaveLength(6);
     expect(overlay.markers.length).toBe(6);
 
@@ -219,7 +221,7 @@ describe("chart-overlays", () => {
     expect(off.legendItems).toEqual([]);
   });
 
-  it("prevents overlapping touchpoint markers on dense 1000-candle charts and exposes legendItems", () => {
+  it("keeps default auto overlay focused on green/red rays, Supply/Demand zones, and S/R levels without swing-marker spam", () => {
     const candles = makeCandles(50, 14_400_000);
     const tA = candles[10]!;
     const tB = candles[20]!;
@@ -248,15 +250,17 @@ describe("chart-overlays", () => {
     };
 
     const overlay = selectChartAnalysisOverlay({
-      enabledStrategies: new Set(["top_down_trendline"]),
+      lens: "auto",
       chartTimeframe: "4h",
       candles,
       analysis: denseAnalysis,
       activeTradeOverlay: null
     });
 
+    expect(overlay.legend).toBe("Pure PA · Break & Retest");
     expect(overlay.legendItems.some((item) => item.label.includes("Support"))).toBe(true);
-    const tMarkers = overlay.markers.filter((m) => m.text?.startsWith("T"));
-    expect(tMarkers.length).toBeGreaterThanOrEqual(2);
+    expect(overlay.levels.length).toBeLessThanOrEqual(2);
+    expect(overlay.zones.length).toBeLessThanOrEqual(2);
+    expect(overlay.markers.every((m) => m.text?.startsWith("T"))).toBe(true);
   });
 });

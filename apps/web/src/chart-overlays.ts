@@ -16,12 +16,10 @@ export type OverlayLens =
   | "off";
 
 export const OVERLAY_LENS_OPTIONS: readonly { readonly id: OverlayLens; readonly label: string }[] = [
-  { id: "auto", label: "TA: Auto (TF)" },
-  { id: "top_down_trendline", label: "TA: Top-Down 4H" },
-  { id: "break_and_retest", label: "TA: Break & Retest" },
-  { id: "liquidity_sweep_reversal", label: "TA: Liquidity Sweep" },
-  { id: "order_block_retest", label: "TA: Order Blocks" },
-  { id: "off", label: "TA: Off" }
+  { id: "auto", label: "Break & Retest + Rays" },
+  { id: "top_down_trendline", label: "Top-Down Rays Only" },
+  { id: "break_and_retest", label: "Supply / Demand + S/R" },
+  { id: "off", label: "Clean Candles Only" }
 ];
 
 export interface LegendBadgeItem {
@@ -160,6 +158,25 @@ function snapTouchToVisibleCandle(
   return best ? { candle: best, price: bestExtreme } : undefined;
 }
 
+function snapLineAnchorsToCandles(
+  line: FourHourTrendline,
+  sourceTimeframe: MarketTimeframe,
+  candles: readonly Candle[],
+  candleByTime: ReadonlyMap<number, Candle>
+): { readonly anchorA: TrendlineTouchpoint; readonly anchorB: TrendlineTouchpoint } {
+  const snapAnchor = (pt: TrendlineTouchpoint): TrendlineTouchpoint => {
+    const snapped = snapTouchToVisibleCandle(pt, sourceTimeframe, line.direction, candles, candleByTime);
+    if (!snapped) return pt;
+    return { openTime: snapped.candle.openTime, price: snapped.price };
+  };
+  const anchorA = snapAnchor(line.anchorA);
+  const anchorB = snapAnchor(line.anchorB);
+  if (anchorB.openTime <= anchorA.openTime) {
+    return { anchorA: line.anchorA, anchorB: line.anchorB };
+  }
+  return { anchorA, anchorB };
+}
+
 function selectBestPair(
   lines: readonly FourHourTrendline[],
   firstMs: number,
@@ -191,7 +208,8 @@ function selectBestPair(
 function toResolvedTrendline(
   line: FourHourTrendline,
   timeframe: MarketTimeframe,
-  roleOverride?: "action" | "safety"
+  roleOverride?: "action" | "safety",
+  snappedAnchors?: { readonly anchorA: TrendlineTouchpoint; readonly anchorB: TrendlineTouchpoint }
 ): ResolvedTrendlineOverlay {
   const role: ResolvedTrendlineOverlay["role"] =
     roleOverride ?? (line.direction === "ascending" ? "support" : "resistance");
@@ -204,21 +222,23 @@ function toResolvedTrendline(
       : roleOverride === "safety"
         ? "Safety Line"
         : line.direction === "ascending"
-          ? `${tfLabel} Support ▲ ${touchBadge}${brokenTag}`
-          : `${tfLabel} Resistance ▼ ${touchBadge}${brokenTag}`;
+          ? `${tfLabel} Uptrend Support (${touchBadge})${brokenTag}`
+          : `${tfLabel} Downtrend Resistance (${touchBadge})${brokenTag}`;
 
   const color =
     roleOverride === "safety"
       ? "#f6465d"
       : roleOverride === "action"
-        ? "#c084fc"
+        ? line.direction === "ascending"
+          ? "#0ecb81"
+          : "#f6465d"
         : line.status === "valid"
           ? line.direction === "ascending"
             ? "#0ecb81"
-            : "#f0b90b"
+            : "#f6465d"
           : line.direction === "ascending"
-            ? "rgba(14, 203, 129, 0.58)"
-            : "rgba(240, 185, 11, 0.58)";
+            ? "rgba(14, 203, 129, 0.48)"
+            : "rgba(246, 70, 93, 0.48)";
 
   const touchpoints =
     line.touchpoints && line.touchpoints.length > 0
@@ -234,8 +254,8 @@ function toResolvedTrendline(
     color,
     dashed: line.status === "broken" || roleOverride === "safety",
     lineWidth: line.status === "valid" || roleOverride !== undefined ? 2 : 1,
-    anchorA: line.anchorA,
-    anchorB: line.anchorB,
+    anchorA: snappedAnchors?.anchorA ?? line.anchorA,
+    anchorB: snappedAnchors?.anchorB ?? line.anchorB,
     touchpoints
   };
 }
@@ -300,6 +320,7 @@ function resolveTouchpointsAndMarkers(
 
   for (const line of trendlines) {
     let lastDotTime = -Infinity;
+    const showMarkers = line.status === "valid" || line.role === "action";
     line.touchpoints.forEach((touch, idx) => {
       const snapped = snapTouchToVisibleCandle(
         touch,
@@ -313,13 +334,11 @@ function resolveTouchpointsAndMarkers(
       const isUpTurn = line.direction === "ascending";
       const timeSec = Math.floor(snapped.candle.openTime / 1000);
       const position: "aboveBar" | "belowBar" = isUpTurn ? "belowBar" : "aboveBar";
-      const color = line.role === "action"
-        ? "#c084fc"
-        : line.role === "safety"
-          ? "#f6465d"
-          : isUpTurn
-            ? "#0ecb81"
-            : "#f0b90b";
+      const color = line.role === "safety"
+        ? "#f6465d"
+        : isUpTurn
+          ? "#0ecb81"
+          : "#f6465d";
 
       if (snapped.candle.openTime - lastDotTime >= minDotGapMs) {
         touchDots.push({
@@ -332,7 +351,7 @@ function resolveTouchpointsAndMarkers(
         lastDotTime = snapped.candle.openTime;
       }
 
-      if (!hasNearbyMarker(snapped.candle.openTime, position, minTouchMarkerGapMs, 2)) {
+      if (showMarkers && !hasNearbyMarker(snapped.candle.openTime, position, minTouchMarkerGapMs, 2)) {
         markerList.push({
           openTime: snapped.candle.openTime,
           timeSec,
@@ -412,12 +431,12 @@ export function selectChartAnalysisOverlay(input: {
       : lens === "top_down_trendline"
         ? new Set<OverlayLens | "swings">(["top_down_trendline", "swings"])
         : lens === "break_and_retest"
-          ? new Set<OverlayLens | "swings">(["break_and_retest", "swings"])
+          ? new Set<OverlayLens | "swings">(["break_and_retest", "order_block_retest"])
           : lens === "liquidity_sweep_reversal"
             ? new Set<OverlayLens | "swings">(["liquidity_sweep_reversal", "swings"])
             : lens === "order_block_retest"
               ? new Set<OverlayLens | "swings">(["order_block_retest"])
-              : new Set<OverlayLens | "swings">(["top_down_trendline", "order_block_retest", "swings"])
+              : new Set<OverlayLens | "swings">(["top_down_trendline", "break_and_retest", "order_block_retest"])
   );
 
   if (activeSet.size === 0 || candles.length === 0) {
@@ -434,6 +453,7 @@ export function selectChartAnalysisOverlay(input: {
 
   const firstMs = candles[0]!.openTime;
   const lastMs = candles.at(-1)!.openTime;
+  const currentClose = Number(candles.at(-1)!.close);
   let candleLow = Infinity;
   let candleHigh = -Infinity;
   for (const c of candles) {
@@ -442,12 +462,14 @@ export function selectChartAnalysisOverlay(input: {
     if (lo < candleLow) candleLow = lo;
     if (hi > candleHigh) candleHigh = hi;
   }
+  const candleByTime = new Map(candles.map((c) => [c.openTime, c]));
 
   const analysisTf: MarketTimeframe = chartTimeframe === "1m" ? "5m" : chartTimeframe;
   const tfLines = analysis?.trendlinesByTimeframe?.[analysisTf] ??
     (analysisTf === "4h" ? analysis?.fourHourTrendlines ?? [] : []);
   const tfSwings = analysis?.swingsByTimeframe?.[analysisTf] ?? [];
   const fourHourLines = analysis?.trendlinesByTimeframe?.["4h"] ?? analysis?.fourHourTrendlines ?? [];
+  const dailyLines = analysis?.trendlinesByTimeframe?.["1d"] ?? [];
   const htfSwings = analysis?.swingLevels ?? [];
   const orderBlocks: readonly ActiveOrderBlockZone[] = analysis?.activeOrderBlocks ?? [];
 
@@ -493,12 +515,18 @@ export function selectChartAnalysisOverlay(input: {
   }
 
   if (activeSet.has("top_down_trendline")) {
-    markerSourceTf = "4h";
-    markerSwings = analysis?.swingsByTimeframe?.["4h"] ?? htfSwings;
-    const picked = selectBestPair(fourHourLines, firstMs, lastMs, candleLow, candleHigh);
+    const linePool = tfLines.length > 0
+      ? tfLines
+      : [...fourHourLines, ...dailyLines];
+    const sourceTf = tfLines.length > 0 ? analysisTf : (fourHourLines.length > 0 ? "4h" : "1d");
+    markerSourceTf = sourceTf;
+    markerSwings = analysis?.swingsByTimeframe?.[sourceTf] ?? htfSwings;
+    const picked = selectBestPair(linePool, firstMs, lastMs, candleLow, candleHigh);
     for (const line of picked) {
       if (!resolvedLines.some((existing) => existing.id.endsWith(line.id))) {
-        resolvedLines.push(toResolvedTrendline(line, "4h"));
+        const lineTf = line.timeframe ?? sourceTf;
+        const snappedAnchors = snapLineAnchorsToCandles(line, lineTf, candles, candleByTime);
+        resolvedLines.push(toResolvedTrendline(line, sourceTf, undefined, snappedAnchors));
       }
     }
     for (const line of resolvedLines) {
@@ -511,25 +539,20 @@ export function selectChartAnalysisOverlay(input: {
   if (activeSet.has("break_and_retest")) {
     markerSourceTf = analysisTf;
     const candidateSwings: ResolvedLevelOverlay[] = [
+      ...(analysis?.swingsByTimeframe?.["1d"] ?? []).slice(-1),
       ...(analysis?.swingsByTimeframe?.["4h"] ?? []).slice(-2),
-      ...(analysis?.swingsByTimeframe?.["1h"] ?? []).slice(-2),
-      ...(analysis?.swingsByTimeframe?.["5m"] ?? []).slice(-2)
+      ...(analysis?.swingsByTimeframe?.[analysisTf] ?? []).slice(-2)
     ]
-      .filter((swing) => swing.price >= candleLow * 0.9 && swing.price <= candleHigh * 1.1)
+      .filter((swing) => swing.price >= candleLow * 0.92 && swing.price <= candleHigh * 1.08)
+      .sort((a, b) => Math.abs(a.price - currentClose) - Math.abs(b.price - currentClose))
       .map((swing) => ({
         id: `br-lvl:${swing.id}`,
         price: swing.price,
-        label: `${formatTfBadge(swing.timeframe)} ${swing.structureTag ?? (swing.direction === "high" ? "Resistance" : "Support")}`,
-        color: swing.direction === "high" ? "rgba(246, 70, 93, 0.78)" : "rgba(14, 203, 129, 0.78)",
+        label: `${formatTfBadge(swing.timeframe)} ${swing.direction === "high" ? "Resistance" : "Support"}`,
+        color: swing.direction === "high" ? "#f6465d" : "#0ecb81",
         dashed: true
       }));
-    addLevelsWithPriceSpacing(resolvedLevels, candidateSwings, 3);
-    if (!legendItems.some((item) => item.label.includes("Support"))) {
-      legendItems.push(
-        { label: "Break & Retest Support", color: "#0ecb81" },
-        { label: "Break & Retest Resistance", color: "#f6465d" }
-      );
-    }
+    addLevelsWithPriceSpacing(resolvedLevels, candidateSwings, 2);
   }
 
   if (activeSet.has("liquidity_sweep_reversal")) {
@@ -557,46 +580,33 @@ export function selectChartAnalysisOverlay(input: {
   }
 
   if (activeSet.has("order_block_retest")) {
-    const visibleObs = orderBlocks
-      .filter((ob) => ob.high >= candleLow * 0.86 && ob.low <= candleHigh * 1.14)
-      .slice(0, 3);
-    for (const ob of visibleObs) {
+    const inViewZones = orderBlocks
+      .filter((ob) => ob.high >= candleLow * 0.9 && ob.low <= candleHigh * 1.1)
+      .sort((a, b) => Math.abs((a.low + a.high) / 2 - currentClose) - Math.abs((b.low + b.high) / 2 - currentClose));
+    const supplyZones = inViewZones.filter((ob) => ob.direction === "supply").slice(0, 1);
+    const demandZones = inViewZones.filter((ob) => ob.direction === "demand").slice(0, 1);
+    for (const ob of [...supplyZones, ...demandZones]) {
       const tfPrefix = ob.timeframe ? `${formatTfBadge(ob.timeframe)} ` : "";
       resolvedZones.push({
         id: `ob:${ob.timeframe ?? "5m"}:${ob.direction}:${ob.startTime}`,
         direction: ob.direction,
-        label: `${tfPrefix}${ob.direction === "demand" ? "Demand OB ▲" : "Supply OB ▼"}`,
+        label: `${tfPrefix}${ob.direction === "demand" ? "Demand" : "Supply"}`,
         low: ob.low,
         high: ob.high,
         startTime: ob.startTime
       });
     }
-    if (!legendItems.some((item) => item.label.includes("Demand OB"))) {
+    if (!legendItems.some((item) => item.label === "Demand")) {
       legendItems.push(
-        { label: "Demand OB", color: "#0ecb81" },
-        { label: "Supply OB", color: "#f6465d" }
+        { label: "Demand", color: "#0ecb81" },
+        { label: "Supply", color: "#f6465d" }
       );
     }
   }
 
-  const enabledNames = [...activeSet].filter((item) => item !== "swings").map((item) => {
-    switch (item) {
-      case "top_down_trendline":
-        return "Top-Down";
-      case "break_and_retest":
-        return "Break & Retest";
-      case "liquidity_sweep_reversal":
-        return "Liquidity Sweep";
-      case "order_block_retest":
-        return "Order Blocks";
-      default:
-        return "Auto";
-    }
-  });
-
-  legend = enabledNames.length > 0
-    ? `${enabledNames.join(" + ")} Active`
-    : "No Overlays Selected";
+  legend = resolvedLines.length > 0 || resolvedZones.length > 0 || resolvedLevels.length > 0
+    ? `Pure PA · Break & Retest`
+    : null;
 
   const { touchDots, markers } = resolveTouchpointsAndMarkers(
     resolvedLines,

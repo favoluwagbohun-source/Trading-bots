@@ -103,7 +103,12 @@ describe("SignalAlertBroadcaster", () => {
     expect(sent).toBe(1);
     expect(sendPhoto).toHaveBeenCalledTimes(1);
     expect(sendPhoto.mock.calls[0]?.[0]).toBe(101);
-    expect(sendPhoto.mock.calls[0]?.[2]).toContain("LIVE SIGNAL · BTCUSDT — BUY");
+    const caption = sendPhoto.mock.calls[0]?.[2];
+    expect(caption).toContain("LIVE SIGNAL · BTCUSDT — BUY");
+    expect(caption).toContain("SL (Stop Loss):");
+    expect(caption).toContain("Take Profit TP1:");
+    expect(caption).toContain("Take Profit TP2:");
+    expect(caption).toContain("Take Profit TP3:");
     expect(broadcaster.getLatestLiveSignals()).toHaveLength(1);
   });
 
@@ -136,5 +141,59 @@ describe("SignalAlertBroadcaster", () => {
     expect(sendPhoto.mock.calls[0]?.[1]).toBeInstanceOf(Blob);
     expect(sendPhoto.mock.calls[0]?.[2]).toContain("QUANT SIGNAL · BTCUSDT (1H) — BUY");
     expect(broadcaster.getLatestQuantSignals().length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("sends deduplicated Telegram breakout expectation notices when price tests near a key level", async () => {
+    const users = new TelegramUserStateStore();
+    users.ensureRegistered(6886426545);
+
+    const stepMs = 300_000;
+    const start = 1_700_000_000_000;
+    // Build candles with an established swing high around 104, then price pressing up to 103.85 (within 0.45%)
+    const closes = [100, 101, 103, 104, 102, 100.5, 100, 101, 102, 103, 103.5, 103.85];
+    const execCandles: Candle[] = closes.map((close, idx) => {
+      const openTime = start + idx * stepMs;
+      const prevClose = idx === 0 ? 99.5 : closes[idx - 1]!;
+      const high = idx === 3 ? 104 : Math.max(prevClose, close) + 0.1;
+      const low = Math.min(prevClose, close) - 0.1;
+      return {
+        openTime,
+        closeTime: openTime + stepMs - 1,
+        open: String(prevClose),
+        high: String(high),
+        low: String(low),
+        close: String(close),
+        volume: "15",
+        closed: true
+      };
+    });
+    const latestClose = execCandles.at(-1)!.closeTime;
+    const datasets = new Map<MarketTimeframe, readonly Candle[]>([
+      ["5m", execCandles],
+      ["1h", makeTrendCandles(15, 3_600_000, latestClose - 15 * 3_600_000 + 1, false)],
+      ["4h", makeTrendCandles(15, 14_400_000, latestClose - 15 * 14_400_000 + 1, false)],
+      ["1d", makeTrendCandles(15, 86_400_000, latestClose - 15 * 86_400_000 + 1, false)]
+    ]);
+
+    const sendPhoto = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => undefined);
+    const broadcaster = new SignalAlertBroadcaster({
+      api: { sendPhoto, sendMessage },
+      users,
+      evidence: {},
+      executionTimeframe: "5m",
+      now: () => latestClose + 10_000
+    });
+
+    const firstCount = await broadcaster.processDatasets("BTCUSDT", datasets);
+    const secondCount = await broadcaster.processDatasets("BTCUSDT", datasets);
+
+    expect(firstCount).toBeGreaterThanOrEqual(1);
+    expect(secondCount).toBe(0);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(6886426545);
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("BREAKOUT NOTICE · BTCUSDT (1D → 5M)");
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("Expecting possible BUY breakout position.");
+    expect(broadcaster.getLatestBreakoutNotices()).toHaveLength(1);
   });
 });
