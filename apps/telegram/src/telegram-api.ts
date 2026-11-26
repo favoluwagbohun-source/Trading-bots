@@ -8,11 +8,14 @@ export interface TelegramUpdate {
   readonly message?: TelegramMessage;
 }
 
+export interface TelegramInlineButton {
+  readonly text: string;
+  readonly web_app?: { readonly url: string };
+  readonly url?: string;
+}
+
 export interface TelegramReplyMarkup {
-  readonly inline_keyboard: readonly (readonly {
-    readonly text: string;
-    readonly web_app: { readonly url: string };
-  }[])[];
+  readonly inline_keyboard: readonly (readonly TelegramInlineButton[])[];
 }
 
 export interface TelegramBotCommand {

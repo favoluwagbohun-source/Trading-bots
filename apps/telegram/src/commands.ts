@@ -344,10 +344,16 @@ export class TelegramCommandService {
   private webAppKeyboard(): TelegramReplyMarkup | undefined {
     if (!this.webAppUrl) return undefined;
     return {
-      inline_keyboard: [[{
-        text: "Open market chart",
-        web_app: { url: this.webAppUrl }
-      }]]
+      inline_keyboard: [
+        [{
+          text: "Open market chart",
+          web_app: { url: this.webAppUrl }
+        }],
+        [{
+          text: "Open in Browser ↗",
+          url: this.webAppUrl
+        }]
+      ]
     };
   }
 }

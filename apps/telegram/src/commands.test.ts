@@ -12,10 +12,16 @@ describe("Telegram chat commands", () => {
     await commands.handleMessage({ chat: { id: 42 }, text: "/start" });
     expect(sendMessage.mock.calls[0]?.[1]).toContain("simulated account size");
     expect(sendMessage.mock.calls[0]?.[2]).toEqual({
-      inline_keyboard: [[{
-        text: "Open market chart",
-        web_app: { url: "https://charts.example/app" }
-      }]]
+      inline_keyboard: [
+        [{
+          text: "Open market chart",
+          web_app: { url: "https://charts.example/app" }
+        }],
+        [{
+          text: "Open in Browser ↗",
+          url: "https://charts.example/app"
+        }]
+      ]
     } satisfies TelegramReplyMarkup);
 
     await commands.handleMessage({ chat: { id: 42 }, text: "$1,000" });
