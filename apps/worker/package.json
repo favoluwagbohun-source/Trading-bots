@@ -1,0 +1,21 @@
+{
+  "name": "@crypto-signal/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@crypto-signal/indicators": "0.1.0",
+    "@crypto-signal/market-data": "0.1.0",
+    "@crypto-signal/shared": "0.1.0",
+    "@crypto-signal/strategies": "0.1.0",
+    "@resvg/resvg-js": "^2.6.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6"
+  }
+}

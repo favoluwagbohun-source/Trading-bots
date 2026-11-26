@@ -1,0 +1,17 @@
+{
+  "name": "@crypto-signal/telegram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@crypto-signal/shared": "0.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6"
+  }
+}
