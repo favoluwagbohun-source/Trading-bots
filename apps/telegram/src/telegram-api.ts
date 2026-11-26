@@ -138,11 +138,14 @@ export class TelegramApiClient {
       ? undefined
       : { "content-type": "application/json" };
     const body = payload instanceof FormData ? payload : JSON.stringify(payload);
+    const timeoutMs = method === "getUpdates" ? 40_000 : 20_000;
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     const response = await this.fetchImpl(`${this.baseUrl}/${method}`, {
       method: "POST",
       ...(headers === undefined ? {} : { headers }),
       body,
-      ...(signal === undefined ? {} : { signal })
+      signal: requestSignal
     });
     let result: unknown;
     try {

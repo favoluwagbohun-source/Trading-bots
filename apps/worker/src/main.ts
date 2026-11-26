@@ -1,3 +1,5 @@
+import { setDefaultResultOrder } from "node:dns";
+import { setDefaultAutoSelectFamily } from "node:net";
 import { BinanceRestClient } from "@crypto-signal/market-data";
 import {
   TelegramApiClient,
@@ -18,6 +20,9 @@ import { SignalAlertBroadcaster } from "./signal-alert-broadcaster.js";
 import { scoreSignalQuality, type SignalGrade, type StrategyQualityEvidence } from "./signal-quality.js";
 import { SignalScanner, type SignalCandidate } from "./signal-scanner.js";
 import { WorkerHealthStore } from "./worker-health.js";
+
+setDefaultResultOrder("ipv4first");
+setDefaultAutoSelectFamily(false);
 
 const DEFAULT_QUALITY_EVIDENCE: Partial<Record<SignalCandidate["strategy"], StrategyQualityEvidence>> = {
   top_down_trendline: { maximumSupportedGrade: "A", source: "deterministic-engine-v1" },

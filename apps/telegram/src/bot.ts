@@ -62,15 +62,19 @@ export class TelegramPollingBot {
     const controller = new AbortController();
     this.controller = controller;
     try {
-      await this.api.deleteWebhook(controller.signal);
-      await this.api.setMyCommands(BOT_COMMANDS, controller.signal);
-      if (this.options.webAppUrl) {
-        await this.api.setChatMenuButton(this.options.webAppUrl, controller.signal);
-      }
-
+      let initialized = false;
       let delay = 1000;
       while (!controller.signal.aborted) {
         try {
+          if (!initialized) {
+            await this.api.deleteWebhook(controller.signal);
+            await this.api.setMyCommands(BOT_COMMANDS, controller.signal);
+            if (this.options.webAppUrl) {
+              await this.api.setChatMenuButton(this.options.webAppUrl, controller.signal);
+            }
+            initialized = true;
+          }
+
           const updates = await this.api.getUpdates(this.offset, controller.signal);
           delay = 1000;
           this.options.onPollSuccess?.();

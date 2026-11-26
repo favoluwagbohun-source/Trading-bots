@@ -41,4 +41,36 @@ describe("Telegram polling bot", () => {
     );
     expect(getUpdates).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
   });
+
+  it("retries transient startup network failures instead of crashing", async () => {
+    let bot: TelegramPollingBot;
+    const onError = vi.fn();
+    let deleteAttempts = 0;
+    const deleteWebhook = vi.fn(async () => {
+      deleteAttempts += 1;
+      if (deleteAttempts === 1) {
+        throw new Error("connect ETIMEDOUT 149.154.166.110:443");
+      }
+    });
+    const getUpdates = vi.fn(async () => {
+      bot.stop();
+      return [];
+    });
+    const api = {
+      deleteWebhook,
+      setMyCommands: vi.fn(async () => undefined),
+      setChatMenuButton: vi.fn(async () => undefined),
+      getUpdates,
+      sendMessage: vi.fn(async () => undefined)
+    };
+    const commands = new TelegramCommandService(api);
+    bot = new TelegramPollingBot(api, commands, { onError });
+
+    await bot.run();
+
+    expect(deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(api.setMyCommands).toHaveBeenCalledOnce();
+    expect(getUpdates).toHaveBeenCalledOnce();
+  });
 });
