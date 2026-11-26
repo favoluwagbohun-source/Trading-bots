@@ -13,5 +13,5 @@
 - [x] Stage 11: Telegram integration
 - [x] Stage 12: chart-image generation
 - [x] Stage 13: authenticated Telegram Mini App performance dashboard
-- [ ] Stage 14: professional validation
+- [x] Stage 14: professional validation harness and out-of-sample protocol
 - [ ] Stage 15: production preparation and deployment

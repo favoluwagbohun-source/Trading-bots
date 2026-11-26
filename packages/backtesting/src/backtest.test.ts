@@ -131,6 +131,8 @@ describe("event-driven backtester", () => {
     });
 
     expect(result.metrics.totalFees).toBeGreaterThan(0);
+    expect(result.trades[0]!.entryPrice).toBeGreaterThan(100);
+    expect(result.trades[0]!.exits.at(-1)!.price).toBeLessThan(100);
     expect(result.trades[0]!.finalPnl).toBeLessThan(result.trades[0]!.grossPnl);
     expect(result.endingEquity - result.startingEquity).toBeCloseTo(result.metrics.netProfit);
   });

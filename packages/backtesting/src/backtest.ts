@@ -95,7 +95,7 @@ function roundDown(quantity: number, step: number): number {
 }
 
 function adverseFill(price: number, side: "buy" | "sell", slippage: number): number {
-  return price * (side === "buy" ? 1 - slippage : 1 + slippage);
+  return price * (side === "buy" ? 1 + slippage : 1 - slippage);
 }
 
 function setupRiskPrice(setup: BacktestSetup, entryPrice: number): number {
@@ -487,6 +487,10 @@ export interface RunBacktestRequest {
   readonly candles: readonly Candle[];
   readonly options: BacktestConfig;
   readonly evaluateSignal: SignalEvaluator;
+  readonly evaluationWindow?: {
+    readonly signalStartIndex: number;
+    readonly endIndex: number;
+  };
 }
 
 export function runBacktest(request: RunBacktestRequest): BacktestResult {
@@ -503,6 +507,18 @@ export function runBacktest(request: RunBacktestRequest): BacktestResult {
   for (let index = 0; index < candles.length; index += 1) {
     assertCandle(candles[index]!, candles[index - 1]);
   }
+  const signalStartIndex = request.evaluationWindow?.signalStartIndex ?? 0;
+  const endIndex = request.evaluationWindow?.endIndex ?? candles.length - 1;
+  if (
+    (candles.length > 0 || request.evaluationWindow !== undefined) &&
+      (!Number.isInteger(signalStartIndex) ||
+        !Number.isInteger(endIndex) ||
+        signalStartIndex < 0 ||
+        endIndex < signalStartIndex ||
+        endIndex >= candles.length)
+  ) {
+    throw new Error("Backtest evaluation window must be within the closed-candle data");
+  }
 
   const trades: BacktestTrade[] = [];
   const equityCurve: EquityPoint[] = [];
@@ -512,7 +528,7 @@ export function runBacktest(request: RunBacktestRequest): BacktestResult {
   let rejectedSignals = 0;
   let unfilledSignals = 0;
 
-  for (let index = 0; index < candles.length; index += 1) {
+  for (let index = 0; index <= endIndex; index += 1) {
     const candle = candles[index]!;
     if (pending) {
       if (candle.openTime <= pending.signalTime) {
@@ -585,7 +601,7 @@ export function runBacktest(request: RunBacktestRequest): BacktestResult {
       active = undefined;
     }
 
-    if (!active) {
+    if (!active && index >= signalStartIndex) {
       const visibleCandles = candles.slice(0, index + 1);
       const setup = request.evaluateSignal(visibleCandles, index);
       if (setup) {
@@ -607,8 +623,8 @@ export function runBacktest(request: RunBacktestRequest): BacktestResult {
   }
 
   if (pending) unfilledSignals += 1;
-  if (active && candles.length > 0) {
-    const lastIndex = candles.length - 1;
+  if (active) {
+    const lastIndex = endIndex;
     const last = candles[lastIndex]!;
     closeQuantity(
       active,

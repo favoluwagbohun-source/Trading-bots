@@ -22,3 +22,28 @@ processing; OHLC data cannot establish the intrabar sequence.
 
 The runner is a research simulator, not evidence of profitability. Inputs must
 be actual historical candles; it does not fabricate data.
+
+## Out-of-sample validation
+
+`runOutOfSampleValidation` evaluates a fixed strategy callback on sequential,
+non-overlapping test folds. `warmupBars` supplies prior closed candles to the
+callback for indicator/context calculation, but no signals or positions are
+allowed before each test window. Trades are closed at each fold boundary;
+signals are entered only at the next candle open. Incomplete trailing windows
+are omitted, and the runner requires at least one complete test fold.
+
+This runner does not optimize or select strategy parameters. Freeze the
+strategy rules, thresholds, instrument filters, and execution-cost assumptions
+before evaluating the held-out periods. The callback must not read future data
+through external state. Keep data collection and parameter selection separate
+from final out-of-sample reporting.
+
+The report includes individual-fold results, pooled trade counts and net PnL,
+profit factor, maximum fold drawdown, and a 95% Wilson interval for win rate.
+The interval describes win-rate uncertainty only; it is not a confidence
+interval for profitability. PnL is summed across independently reset folds,
+not presented as one compounded account equity curve. Results with few or no
+trades are weak or insufficient evidence, not a pass. Validation still
+requires licensed, timestamped market data and realistic fee/slippage inputs;
+the repository does not include a validated historical dataset or claim any
+strategy is profitable.

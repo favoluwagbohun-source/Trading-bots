@@ -4,8 +4,10 @@ A modular cryptocurrency market-analysis, paper-trading, backtesting, charting, 
 
 ## Current implementation
 
-Stages 1-13 are implemented. Stages 14-15 cover professional validation and
-production preparation. The repository provides:
+Stages 1-14 are implemented. Stage 14 adds a repeatable, fixed-rule
+out-of-sample validation harness; no strategy profitability has been
+established because no reviewable historical dataset has been supplied.
+Stage 15 covers production preparation. The repository provides:
 
 - a TypeScript monorepo and documented architecture;
 - Binance public market-data, indicators, strategies, risk, and backtesting packages;
