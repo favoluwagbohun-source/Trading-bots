@@ -5,6 +5,7 @@ import {
   type MarketTimeframe
 } from "@crypto-signal/market-data";
 import { MarketChart } from "./components/MarketChart.js";
+import { PaperDashboard } from "./PaperDashboard.js";
 import {
   fetchHistoricalCandles,
   marketStreamUrl,
@@ -231,6 +232,7 @@ export function ChartPage() {
         </a>
         <nav className="primary-nav" aria-label="Main navigation">
           <a className="selected" href="#chart">Markets</a>
+          <a href="#performance">Performance</a>
         </nav>
         <div className="topbar-status">
           <span className={statusClass} />
@@ -347,6 +349,8 @@ export function ChartPage() {
         candles={candles}
         marketKey={`${symbol}:${timeframe}:${startDate}:${endDate}`}
       />
+
+      <PaperDashboard />
 
       <footer className="app-footer">
         <span>Market data served by the platform API from Binance public endpoints.</span>

@@ -12,6 +12,6 @@
 - [x] Stage 10: chart application
 - [x] Stage 11: Telegram integration
 - [x] Stage 12: chart-image generation
-- [ ] Stage 13: performance dashboard
+- [x] Stage 13: authenticated Telegram Mini App performance dashboard
 - [ ] Stage 14: professional validation
 - [ ] Stage 15: production preparation and deployment

@@ -10,6 +10,11 @@ import {
   type StreamOptions
 } from "@crypto-signal/market-data";
 import WebSocket from "ws";
+import {
+  getPaperDashboard,
+  TelegramAuthorizationError,
+  type PaperDashboardOptions
+} from "./paper-dashboard.js";
 
 interface MarketQuery {
   readonly symbol?: string;
@@ -27,6 +32,9 @@ interface MarketStreamQuery {
 interface ApiDependencies {
   readonly restClient?: Pick<BinanceRestClient, "getHistoricalKlines">;
   readonly streamFactory?: (options: StreamOptions) => Pick<BinanceKlineStream, "start" | "stop">;
+  readonly paperDashboard?: Omit<PaperDashboardOptions, "botToken"> & {
+    readonly botToken?: string;
+  };
   readonly logger?: boolean;
 }
 
@@ -140,6 +148,36 @@ export async function createApiServer(
   await app.register(websocket);
 
   app.get("/health", async () => ({ status: "ok" }));
+
+  app.get("/api/paper/dashboard", async (request, reply) => {
+    const botToken = dependencies.paperDashboard?.botToken ?? process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      return reply.code(503).send({ error: "Paper dashboard authentication is not configured" });
+    }
+    const authorization = request.headers.authorization;
+    const initData = typeof authorization === "string" && authorization.startsWith("tma ")
+      ? authorization.slice(4)
+      : "";
+    try {
+      const dashboard = await getPaperDashboard(
+        {
+          botToken,
+          telegramStatePath: dependencies.paperDashboard?.telegramStatePath ??
+            process.env.TELEGRAM_STATE_PATH ?? "./data/telegram-state.json",
+          paperTradesPath: dependencies.paperDashboard?.paperTradesPath ??
+            process.env.PAPER_TRADES_PATH ?? "./data/paper-trades.json"
+        },
+        initData
+      );
+      return dashboard;
+    } catch (error) {
+      if (error instanceof TelegramAuthorizationError) {
+        return reply.code(401).send({ error: "Valid Telegram WebApp authorization is required" });
+      }
+      request.log.error({ err: error }, "Failed to load paper-trading dashboard");
+      return reply.code(500).send({ error: "Paper-trading dashboard data is unavailable" });
+    }
+  });
 
   app.get<{ Querystring: MarketQuery }>(
     "/api/market/klines",
