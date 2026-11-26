@@ -11,6 +11,7 @@ import { EngineStatusView } from "./components/EngineStatusView.js";
 import { MarketChart } from "./components/MarketChart.js";
 import { PairPickerModal } from "./components/PairPickerModal.js";
 import { QuantSignalsView } from "./components/QuantSignalsView.js";
+import { SignalFeedView } from "./components/SignalFeedView.js";
 import { StrategyOverlayToggles } from "./components/StrategyOverlayToggles.js";
 import { PaperDashboard } from "./PaperDashboard.js";
 import {
@@ -35,7 +36,7 @@ import {
   type PlatformHealthBundle
 } from "./market-api.js";
 
-type AppTab = "chart" | "analysis" | "quant" | "desk" | "engine";
+type AppTab = "chart" | "analysis" | "quant" | "feed" | "desk" | "engine";
 type ConnectionState = "loading" | "connecting" | "connected" | "reconnecting" | "historical" | "error";
 
 const DEFAULT_PAIRS = ["BTCUSDT", "BTCUSDC", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
@@ -49,7 +50,7 @@ function initialSymbolFromUrl(): string {
 function initialTabFromUrl(): AppTab {
   if (typeof window === "undefined") return "chart";
   const raw = new URLSearchParams(window.location.search).get("tab");
-  if (raw === "analysis" || raw === "quant" || raw === "desk" || raw === "engine") return raw;
+  if (raw === "analysis" || raw === "quant" || raw === "feed" || raw === "desk" || raw === "engine") return raw;
   return "chart";
 }
 
@@ -414,6 +415,8 @@ export function ChartPage() {
             [
               ["chart", "Chart"],
               ["analysis", "Analysis"],
+              ["quant", "Quant"],
+              ["feed", "Signal Feed"],
               ["desk", "Paper Desk"],
               ["engine", "Engine"]
             ] as const
@@ -614,6 +617,27 @@ export function ChartPage() {
         </div>
       )}
 
+      {activeTab === "quant" && (
+        <QuantSignalsView
+          symbol={symbol}
+          timeframe={timeframe}
+          candles={candles}
+          onPlotTrade={handlePlotTrade}
+        />
+      )}
+
+      {activeTab === "feed" && (
+        <SignalFeedView
+          watchlist={availablePairs}
+          onPlotTrade={handlePlotTrade}
+          onSelectSymbol={(nextSymbol, nextTimeframe) => {
+            setSymbol(nextSymbol);
+            setTimeframe(nextTimeframe);
+            setActiveTab("chart");
+          }}
+        />
+      )}
+
       {activeTab === "analysis" && (
         <AnalysisView
           symbol={symbol}
@@ -661,13 +685,23 @@ export function ChartPage() {
         </button>
         <button
           type="button"
-          className={activeTab === "analysis" ? "bottom-nav-item active" : "bottom-nav-item"}
-          onClick={() => setActiveTab("analysis")}
+          className={activeTab === "quant" ? "bottom-nav-item active" : "bottom-nav-item"}
+          onClick={() => setActiveTab("quant")}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 18l5-6 4 3 7-9M16 6h4v4" />
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
           </svg>
-          <span>Analysis</span>
+          <span>Quant</span>
+        </button>
+        <button
+          type="button"
+          className={activeTab === "feed" ? "bottom-nav-item active" : "bottom-nav-item"}
+          onClick={() => setActiveTab("feed")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h16M4 12h16M4 18h10" />
+          </svg>
+          <span>Feed</span>
         </button>
         <button
           type="button"
